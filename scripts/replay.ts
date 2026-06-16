@@ -85,7 +85,9 @@ function summarize(tape: GameTape, world: WorldState): void {
     `seed        ${tape.seed}`,
     `field       ${tape.width}x${tape.height}`,
     `ticks       ${tape.inputs.length} (final tick ${world.tick})`,
-    `ape         x=${world.ape.x} y=${world.ape.y.toFixed(1)} vY=${world.ape.velY.toFixed(1)}`,
+    `apes        t0=${world.apes.filter((a) => a.team === 0 && a.health > 0 && a.y <= world.height).length} ` +
+      `t1=${world.apes.filter((a) => a.team === 1 && a.health > 0 && a.y <= world.height).length} alive`,
+    `phase       ${world.phase}  winner=${world.winner}`,
     `wind        ${world.wind.toFixed(1)}`,
     `shot        ${world.shot ? 'in flight' : 'none'}`,
     `terrain     ${solid} solid px`,

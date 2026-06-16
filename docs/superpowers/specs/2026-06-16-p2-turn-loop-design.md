@@ -22,7 +22,7 @@
 A `phase` field on `WorldState` drives the loop. Phases advance by **tick counts only** (never wall-clock):
 
 - **`AIMING`** — the active ape aims/charges/fires. `turnTimer` counts down from `TURN_TICKS` (**1500 = 30 s @ 50 Hz**). If it reaches 0 with no shot fired, the turn ends (a skipped turn). Input affects only `activeApe`.
-- **`RESOLVING`** — entered when the fired shot is gone (detonated or off-screen). The world waits until it is **at rest**: no shot in flight AND every living ape satisfies `velX == 0 && velY == 0` and is grounded (or is dead / off-map). A `resolveTimer` capped at `RESOLVE_MAX_TICKS` (**400 = 8 s**) is a spiral guard that forces `TURN_END` if rest is never reached.
+- **`RESOLVING`** — entered the **moment a shot is fired** (so aiming is locked out for the rest of the turn; a 0-power release that produces no shot stays in `AIMING`). The world then waits until it is **at rest**: no shot in flight AND every living ape satisfies `velX == 0 && velY == 0` and is grounded (or is dead / off-map). A `resolveTimer` capped at `RESOLVE_MAX_TICKS` (**400 = 8 s**) is a spiral guard that forces `TURN_END` if rest is never reached.
 - **`TURN_END`** — apply deaths (health ≤ 0 or `y > height`), run the win check (§5). If the match continues, rotate to the **next living ape on the other team** (§4), re-roll wind from the RNG cursor, reset `aim = createAim()`, set `turnTimer = TURN_TICKS`, → `AIMING`.
 - **`GAMEOVER`** — terminal. `winner` holds the surviving team index, or `-1` for a draw (mutual elimination). The sim still ticks (apes settle) but accepts no fire input.
 
