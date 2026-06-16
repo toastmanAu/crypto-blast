@@ -41,6 +41,9 @@ export class GameScene extends Phaser.Scene {
 
   // Render-only objects.
   private apeRects: Phaser.GameObjects.Rectangle[] = [];
+  private healthBars: Phaser.GameObjects.Rectangle[] = [];
+  private activeMarker!: Phaser.GameObjects.Triangle;
+  private banner!: Phaser.GameObjects.Text;
   private shotDot: Phaser.GameObjects.Arc | null = null;
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
@@ -68,6 +71,14 @@ export class GameScene extends Phaser.Scene {
       const colour = ape.team === 0 ? 0x33ddaa : 0xdd5577;
       this.apeRects.push(this.add.rectangle(ape.x, ape.y, APE_WIDTH, APE_HEIGHT, colour));
     }
+
+    for (let i = 0; i < this.world.apes.length; i++) {
+      this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5));
+    }
+    this.activeMarker = this.add.triangle(0, 0, 0, 0, 12, 0, 6, 10, 0xffffff);
+    this.banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, '', {
+      color: '#ffffff', fontSize: '48px', backgroundColor: '#000000aa', padding: { x: 16, y: 10 },
+    }).setOrigin(0.5).setVisible(false);
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
     this.powerBar = this.add.rectangle(20, GAME_HEIGHT - 30, 0, 14, 0xff5544).setOrigin(0, 0.5);
@@ -157,11 +168,33 @@ export class GameScene extends Phaser.Scene {
 
     for (let i = 0; i < w.apes.length; i++) {
       const ape = w.apes[i];
+      const rx = lerp(ape.prevX, ape.x, alpha);
+      const ry = lerp(ape.prevY, ape.y, alpha);
+      const liveApe = ape.health > 0 && ape.y <= w.height;
+
       const rect = this.apeRects[i];
-      rect.x = lerp(ape.prevX, ape.x, alpha);
-      rect.y = lerp(ape.prevY, ape.y, alpha);
+      rect.x = rx;
+      rect.y = ry;
       rect.fillColor = ape.team === 0 ? 0x33ddaa : 0xdd5577;
-      rect.setAlpha(ape.health > 0 && ape.y <= w.height ? 1 : 0.25);
+      rect.setAlpha(liveApe ? 1 : 0.2);
+
+      const bar = this.healthBars[i];
+      bar.setVisible(liveApe);
+      if (liveApe) {
+        const frac = Math.max(0, ape.health) / 100;
+        bar.width = APE_WIDTH * frac;
+        bar.x = rx - APE_WIDTH / 2;
+        bar.y = ry - APE_HEIGHT / 2 - 8;
+        bar.fillColor = frac > 0.5 ? 0x44ff66 : frac > 0.25 ? 0xffcc33 : 0xff4444;
+      }
+    }
+
+    const active = w.apes[w.activeApe];
+    const showMarker = w.phase === 'AIMING';
+    this.activeMarker.setVisible(showMarker);
+    if (showMarker) {
+      this.activeMarker.x = lerp(active.prevX, active.x, alpha) - 6;
+      this.activeMarker.y = lerp(active.prevY, active.y, alpha) - APE_HEIGHT / 2 - 18;
     }
 
     if (w.shot) {
@@ -176,10 +209,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
-    this.drawAim();
+    this.aimLine.setVisible(showMarker);
+    if (showMarker) this.drawAim();
+
+    const teamName = active.team === 0 ? 'GREEN' : 'PINK';
+    const secs = Math.ceil(w.turnTimer / 50);
     this.hud.setText(
-      `Wind: ${w.wind.toFixed(0)}   Angle: ${(w.aim.angle * 180 / Math.PI).toFixed(0)}°   Tick: ${w.tick}   [↑/↓ aim, hold SPACE = power, T = save tape]`,
+      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Angle ${(w.aim.angle * 180 / Math.PI).toFixed(0)}°   [↑/↓ aim · hold SPACE · T save]`,
     );
+
+    if (w.phase === 'GAMEOVER') {
+      this.banner.setVisible(true);
+      this.banner.setText(w.winner === -1 ? 'DRAW' : `TEAM ${w.winner === 0 ? 'GREEN' : 'PINK'} WINS`);
+    }
   }
 
   private drawAim(): void {
