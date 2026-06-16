@@ -4,6 +4,9 @@ import { generateTerrainMask, TerrainMask } from '../terrain/TerrainGenerator';
 import { TerrainRenderer } from '../render/TerrainRenderer';
 import { columnSurface, isSolid } from '../physics/DestructibleTerrain';
 
+// Ape falls faster than projectiles (heavier object feel).
+const APE_GRAVITY = 900;
+
 export class GameScene extends Phaser.Scene {
   private mask!: TerrainMask;
   private terrain!: TerrainRenderer;
@@ -31,9 +34,13 @@ export class GameScene extends Phaser.Scene {
     const feetX = this.ape.x;
     const feetY = this.ape.y + this.ape.height / 2;
     if (!isSolid(this.mask, feetX, feetY + 1)) {
-      this.apeVelY += 900 * dt;
+      this.apeVelY += APE_GRAVITY * dt;
       this.ape.y += this.apeVelY * dt;
     } else {
+      this.apeVelY = 0;
+    }
+    if (this.ape.y > GAME_HEIGHT + 100) {
+      this.ape.y = GAME_HEIGHT - 50;
       this.apeVelY = 0;
     }
   }

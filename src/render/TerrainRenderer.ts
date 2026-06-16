@@ -35,7 +35,10 @@ export class TerrainRenderer {
         px[o + 2] = SOLID_RGBA[2];
         px[o + 3] = SOLID_RGBA[3];
       } else {
-        px[o + 3] = 0; // transparent where empty
+        px[o] = 0;
+        px[o + 1] = 0;
+        px[o + 2] = 0;
+        px[o + 3] = 0;
       }
     }
     this.canvasTexture.getContext().putImageData(this.imageData, 0, 0);
