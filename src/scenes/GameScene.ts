@@ -40,7 +40,7 @@ export class GameScene extends Phaser.Scene {
   };
 
   // Render-only objects.
-  private ape!: Phaser.GameObjects.Rectangle;
+  private apeRects: Phaser.GameObjects.Rectangle[] = [];
   private shotDot: Phaser.GameObjects.Arc | null = null;
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
@@ -64,7 +64,10 @@ export class GameScene extends Phaser.Scene {
     this.terrain = new TerrainRenderer(this, this.world.mask);
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
 
-    this.ape = this.add.rectangle(this.world.ape.x, this.world.ape.y, APE_WIDTH, APE_HEIGHT, 0x33ddaa);
+    for (const ape of this.world.apes) {
+      const colour = ape.team === 0 ? 0x33ddaa : 0xdd5577;
+      this.apeRects.push(this.add.rectangle(ape.x, ape.y, APE_WIDTH, APE_HEIGHT, colour));
+    }
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
     this.powerBar = this.add.rectangle(20, GAME_HEIGHT - 30, 0, 14, 0xff5544).setOrigin(0, 0.5);
@@ -152,8 +155,14 @@ export class GameScene extends Phaser.Scene {
   private render(alpha: number): void {
     const w = this.world;
 
-    this.ape.x = w.ape.x;
-    this.ape.y = lerp(w.ape.prevY, w.ape.y, alpha);
+    for (let i = 0; i < w.apes.length; i++) {
+      const ape = w.apes[i];
+      const rect = this.apeRects[i];
+      rect.x = lerp(ape.prevX, ape.x, alpha);
+      rect.y = lerp(ape.prevY, ape.y, alpha);
+      rect.fillColor = ape.team === 0 ? 0x33ddaa : 0xdd5577;
+      rect.setAlpha(ape.health > 0 && ape.y <= w.height ? 1 : 0.25);
+    }
 
     if (w.shot) {
       if (!this.shotDot) this.shotDot = this.add.circle(0, 0, 5, 0xffffff);
