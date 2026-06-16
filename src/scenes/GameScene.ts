@@ -10,6 +10,7 @@ import { WEAPONS } from '../weapons/weaponData';
 
 // Ape falls faster than projectiles (heavier object feel).
 const APE_GRAVITY = 900;
+const POWER_BAR_WIDTH = 200;
 
 interface ActiveShot {
   state: ProjectileState;
@@ -53,7 +54,7 @@ export class GameScene extends Phaser.Scene {
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
     this.powerBar = this.add.rectangle(20, GAME_HEIGHT - 30, 0, 14, 0xff5544).setOrigin(0, 0.5);
-    this.add.rectangle(20, GAME_HEIGHT - 30, 200, 14).setOrigin(0, 0.5).setStrokeStyle(2, 0xffffff);
+    this.add.rectangle(20, GAME_HEIGHT - 30, POWER_BAR_WIDTH, 14).setOrigin(0, 0.5).setStrokeStyle(2, 0xffffff);
     this.hud = this.add.text(20, 16, '', { color: '#ffffff', fontSize: '16px' });
 
     this.keys = {
@@ -64,7 +65,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private muzzle(): { x: number; y: number } {
-    return { x: this.ape.x, y: this.ape.y - 8 };
+    // Project out from the ape along the aim direction so the shot clears its body.
+    const clearance = 22; // just beyond the 36px-tall ape's top edge
+    return {
+      x: this.ape.x + Math.cos(this.aim.angle) * clearance,
+      y: this.ape.y - 18 - Math.sin(this.aim.angle) * clearance,
+    };
   }
 
   update(_time: number, delta: number): void {
@@ -101,7 +107,7 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.aim.startCharge();
     if (this.keys.fire.isDown) this.aim.updateCharge(dt);
     if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.fire(this.aim.release());
-    this.powerBar.width = this.aim.power * 200;
+    this.powerBar.width = this.aim.power * POWER_BAR_WIDTH;
   }
 
   private fire(power: number): void {
@@ -133,7 +139,7 @@ export class GameScene extends Phaser.Scene {
         if (!offscreen) this.detonate(x, y, weapon.blastRadius);
         this.shot.dot.destroy();
         this.shot = null;
-        this.wind = rollWind((Math.floor(x) ^ Math.floor(y)) >>> 0); // re-roll for next shot
+        this.wind = rollWind(((Math.floor(x) ^ Math.floor(y)) + Math.round(this.wind * 100)) >>> 0); // re-roll for next shot
         return;
       }
     }
