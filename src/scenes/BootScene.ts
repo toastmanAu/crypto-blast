@@ -6,10 +6,10 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.add.rectangle(this.scale.width / 2, this.scale.height / 2, 200, 80, 0x33ddaa);
     this.add.text(this.scale.width / 2, this.scale.height / 2, 'CRYPTO BLAST', {
-      color: '#1a1320',
-      fontSize: '24px',
+      color: '#33ddaa',
+      fontSize: '32px',
     }).setOrigin(0.5);
+    this.time.delayedCall(600, () => this.scene.start('Game'));
   }
 }
