@@ -4,7 +4,7 @@ export interface Vec2 {
 }
 
 export interface ProjectileParams {
-  mass: number;               // affects wind susceptibility (heavier = less drift)
+  mass: number;               // informational; windSusceptibility is the live wind knob (P3 may derive it from mass)
   gravityScale: number;       // multiplies base gravity (arc shape)
   drag: number;               // air resistance, fraction of speed shed per second
   windSusceptibility: number; // multiplier applied to wind acceleration

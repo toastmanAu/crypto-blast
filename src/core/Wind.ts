@@ -1,4 +1,4 @@
-import { mulberry32 } from '../terrain/TerrainGenerator';
+import { mulberry32 } from '../core/rng';
 
 /** Signed horizontal wind acceleration (px/s^2) in [-maxWind, +maxWind]. */
 export function rollWind(seed: number, maxWind = 220): number {

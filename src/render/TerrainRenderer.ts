@@ -14,6 +14,9 @@ export class TerrainRenderer {
   private readonly imageData: ImageData;
 
   constructor(scene: Phaser.Scene, private readonly mask: TerrainMask) {
+    if (scene.textures.exists(TEXTURE_KEY)) {
+      scene.textures.remove(TEXTURE_KEY);
+    }
     this.canvasTexture = scene.textures.createCanvas(TEXTURE_KEY, mask.width, mask.height)!;
     const ctx = this.canvasTexture.getContext();
     this.imageData = ctx.createImageData(mask.width, mask.height);

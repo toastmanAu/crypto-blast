@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  mulberry32, generateHeightmap, generateTerrainMask,
-} from '../src/terrain/TerrainGenerator';
+import { mulberry32 } from '../src/core/rng';
+import { generateHeightmap, generateTerrainMask } from '../src/terrain/TerrainGenerator';
 
 describe('mulberry32', () => {
   it('is deterministic for a given seed', () => {

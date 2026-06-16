@@ -5,7 +5,7 @@ export interface WeaponDef {
   name: string;
   projectile: ProjectileParams;
   blastRadius: number;
-  damage: number;
+  damage: number;        // TODO(P2): applied to ape health in the turn loop
   launchSpeed: number; // px/s at full power
 }
 
