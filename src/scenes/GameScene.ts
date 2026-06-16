@@ -1,162 +1,181 @@
 import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT } from '../main';
-import { generateTerrainMask, TerrainMask } from '../terrain/TerrainGenerator';
 import { TerrainRenderer } from '../render/TerrainRenderer';
-import { columnSurface, isSolid, carveCircle } from '../physics/DestructibleTerrain';
-import { AimController } from '../core/AimController';
-import { rollWind } from '../core/Wind';
-import { stepProjectile, ProjectileState } from '../physics/ProjectilePhysics';
-import { WEAPONS } from '../weapons/weaponData';
+import { FIXED_DT, MAX_STEPS_PER_FRAME, drainAccumulator, lerp } from '../core/time';
+import {
+  WorldState, TickInput, SimEvent, APE_WIDTH, APE_HEIGHT,
+  createWorld, stepWorld, muzzle, hashWorld,
+} from '../sim/World';
+import { GameTape, createTape, recordTick } from '../sim/tape';
+import { downloadJson } from '../util/download';
 
-// Ape falls faster than projectiles (heavier object feel).
-const APE_GRAVITY = 900;
 const POWER_BAR_WIDTH = 200;
+// Fixed for now; later the match seed comes from the lobby / chain.
+const MATCH_SEED = 1234;
 
-interface ActiveShot {
-  state: ProjectileState;
-  dot: Phaser.GameObjects.Arc;
+/** Raw input sampled per frame; edges are latched until a tick consumes them. */
+interface FrameInput {
+  aimUp: boolean;
+  aimDown: boolean;
+  fireHeld: boolean;
+  firePressed: boolean;
+  fireReleased: boolean;
 }
 
+/**
+ * GameScene is a thin driver: it samples input, advances the headless WorldState
+ * in fixed 50Hz ticks (recording each tick to the tape), and renders the world
+ * with interpolation. No game logic lives here — it all lives in sim/World.ts,
+ * which is what lets a match be replayed and verified headlessly.
+ */
 export class GameScene extends Phaser.Scene {
-  private mask!: TerrainMask;
+  private world!: WorldState;
+  private tape!: GameTape;
   private terrain!: TerrainRenderer;
-  private ape!: Phaser.GameObjects.Rectangle;
-  private apeVelY = 0;
+  private accumulator = 0;
 
-  private aim = new AimController();
+  // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
+  private frameInput: FrameInput = {
+    aimUp: false, aimDown: false, fireHeld: false, firePressed: false, fireReleased: false,
+  };
+
+  // Render-only objects.
+  private ape!: Phaser.GameObjects.Rectangle;
+  private shotDot: Phaser.GameObjects.Arc | null = null;
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
-  private wind = 0;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
     fire: Phaser.Input.Keyboard.Key;
+    save: Phaser.Input.Keyboard.Key;
   };
-
-  private shot: ActiveShot | null = null;
 
   constructor() {
     super('Game');
   }
 
   create(): void {
-    this.mask = generateTerrainMask(GAME_WIDTH, GAME_HEIGHT, 1234);
-    this.terrain = new TerrainRenderer(this, this.mask);
+    this.world = createWorld(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
+    this.tape = createTape(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
+
+    this.terrain = new TerrainRenderer(this, this.world.mask);
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
 
-    const startX = Math.floor(GAME_WIDTH * 0.3);
-    const surfaceY = columnSurface(this.mask, startX) ?? GAME_HEIGHT - 50;
-    this.ape = this.add.rectangle(startX, surfaceY - 18, 24, 36, 0x33ddaa);
-
-    this.wind = rollWind(99);
+    this.ape = this.add.rectangle(this.world.ape.x, this.world.ape.y, APE_WIDTH, APE_HEIGHT, 0x33ddaa);
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
     this.powerBar = this.add.rectangle(20, GAME_HEIGHT - 30, 0, 14, 0xff5544).setOrigin(0, 0.5);
     this.add.rectangle(20, GAME_HEIGHT - 30, POWER_BAR_WIDTH, 14).setOrigin(0, 0.5).setStrokeStyle(2, 0xffffff);
     this.hud = this.add.text(20, 16, '', { color: '#ffffff', fontSize: '16px' });
 
+    const keyboard = this.input.keyboard!;
     this.keys = {
-      up: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.UP),
-      down: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN),
-      fire: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
-    };
-  }
-
-  private muzzle(): { x: number; y: number } {
-    // Project out from the ape along the aim direction so the shot clears its body.
-    const clearance = 22; // just beyond the 36px-tall ape's top edge
-    return {
-      x: this.ape.x + Math.cos(this.aim.angle) * clearance,
-      y: this.ape.y - 18 - Math.sin(this.aim.angle) * clearance,
+      up: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.UP),
+      down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN),
+      fire: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+      save: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T),
     };
   }
 
   update(_time: number, delta: number): void {
-    const dt = delta / 1000;
-    this.settleApe(dt);
-    this.handleAimInput(dt);
-    this.handleFireInput(dt);
-    this.advanceShot(dt);
-    this.drawAim();
-    this.hud.setText(`Wind: ${this.wind.toFixed(0)}   Angle: ${(this.aim.angle * 180 / Math.PI).toFixed(0)}°   [↑/↓ aim, hold SPACE = power]`);
-  }
+    this.sampleInput();
 
-  private settleApe(dt: number): void {
-    const feetY = this.ape.y + this.ape.height / 2;
-    if (!isSolid(this.mask, this.ape.x, feetY + 1)) {
-      this.apeVelY += APE_GRAVITY * dt;
-      this.ape.y += this.apeVelY * dt;
-    } else {
-      this.apeVelY = 0;
-    }
-    if (this.ape.y > GAME_HEIGHT + 100) {
-      this.ape.y = GAME_HEIGHT - 50;
-      this.apeVelY = 0;
-    }
-  }
-
-  private handleAimInput(dt: number): void {
-    if (this.keys.up.isDown) this.aim.adjustAngle(1, dt);
-    if (this.keys.down.isDown) this.aim.adjustAngle(-1, dt);
-  }
-
-  private handleFireInput(dt: number): void {
-    if (this.shot) return; // one shot in flight at a time
-    if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.aim.startCharge();
-    if (this.keys.fire.isDown) this.aim.updateCharge(dt);
-    if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.fire(this.aim.release());
-    this.powerBar.width = this.aim.power * POWER_BAR_WIDTH;
-  }
-
-  private fire(power: number): void {
-    if (power <= 0) return;
-    const weapon = WEAPONS.moonShot;
-    const speed = power * weapon.launchSpeed;
-    const m = this.muzzle();
-    const dot = this.add.circle(m.x, m.y, 5, 0xffffff);
-    this.shot = {
-      dot,
-      state: {
-        pos: { x: m.x, y: m.y },
-        vel: { x: Math.cos(this.aim.angle) * speed, y: -Math.sin(this.aim.angle) * speed },
-      },
-    };
-  }
-
-  private advanceShot(dt: number): void {
-    if (!this.shot) return;
-    const weapon = WEAPONS.moonShot;
-    // Sub-step so a fast shot cannot tunnel through thin terrain.
-    const steps = 4;
-    const sub = dt / steps;
+    this.accumulator += delta / 1000;
+    const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < steps; i++) {
-      this.shot.state = stepProjectile(this.shot.state, weapon.projectile, this.wind, sub);
-      const { x, y } = this.shot.state.pos;
-      const offscreen = x < -50 || x > GAME_WIDTH + 50 || y > GAME_HEIGHT + 50;
-      if (isSolid(this.mask, x, y) || offscreen) {
-        if (!offscreen) this.detonate(x, y, weapon.blastRadius);
-        this.shot.dot.destroy();
-        this.shot = null;
-        this.wind = rollWind(((Math.floor(x) ^ Math.floor(y)) + Math.round(this.wind * 100)) >>> 0); // re-roll for next shot
-        return;
+      const input = this.takeTickInput();
+      stepWorld(this.world, input);
+      recordTick(this.tape, input);
+      this.applyEvents(this.world.events);
+    }
+    this.accumulator = remainder;
+
+    // Frame-level action, NOT a sim tick — must not enter the tape.
+    if (Phaser.Input.Keyboard.JustDown(this.keys.save)) this.exportTape();
+
+    this.render(this.accumulator / FIXED_DT);
+  }
+
+  /** Download the recorded tape and show the exact command to verify it. */
+  private exportTape(): void {
+    const hash = (hashWorld(this.world) >>> 0).toString(16).padStart(8, '0');
+    const name = `crypto-blast-seed${this.tape.seed}-tick${this.world.tick}.json`;
+    downloadJson(name, this.tape);
+
+    const toast = this.add.text(
+      20, GAME_HEIGHT - 70,
+      `Saved ${name}  (${this.tape.inputs.length} ticks)\nverify:  npm run replay -- ${name} --expect 0x${hash}`,
+      { color: '#9effa0', fontSize: '13px', backgroundColor: '#00000088', padding: { x: 6, y: 4 } },
+    );
+    this.tweens.add({ targets: toast, alpha: 0, delay: 4000, duration: 1000, onComplete: () => toast.destroy() });
+  }
+
+  /** Sample held keys; latch press/release edges until a tick consumes them. */
+  private sampleInput(): void {
+    this.frameInput.aimUp = this.keys.up.isDown;
+    this.frameInput.aimDown = this.keys.down.isDown;
+    this.frameInput.fireHeld = this.keys.fire.isDown;
+    if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.frameInput.firePressed = true;
+    if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.frameInput.fireReleased = true;
+  }
+
+  /** Build the input for one tick, consuming edges so they fire exactly once. */
+  private takeTickInput(): TickInput {
+    const fi = this.frameInput;
+    const input: TickInput = {
+      aimUp: fi.aimUp,
+      aimDown: fi.aimDown,
+      fireHeld: fi.fireHeld,
+      firePressed: fi.firePressed,
+      fireReleased: fi.fireReleased,
+    };
+    fi.firePressed = false;
+    fi.fireReleased = false;
+    return input;
+  }
+
+  /** Turn sim events into one-shot visual effects (purely cosmetic). */
+  private applyEvents(events: SimEvent[]): void {
+    for (const ev of events) {
+      if (ev.type === 'detonation') {
+        this.terrain.redraw();
+        const flash = this.add.circle(ev.x, ev.y, ev.radius, 0xffaa33, 0.8);
+        this.tweens.add({ targets: flash, alpha: 0, scale: 1.4, duration: 250, onComplete: () => flash.destroy() });
       }
     }
-    this.shot.dot.setPosition(this.shot.state.pos.x, this.shot.state.pos.y);
   }
 
-  private detonate(x: number, y: number, radius: number): void {
-    carveCircle(this.mask, x, y, radius);
-    this.terrain.redraw();
-    const flash = this.add.circle(x, y, radius, 0xffaa33, 0.8);
-    this.tweens.add({ targets: flash, alpha: 0, scale: 1.4, duration: 250, onComplete: () => flash.destroy() });
-    this.apeVelY = 0; // let the ape re-settle / fall into a fresh crater
+  /** Push interpolated world state onto render objects. No simulation here. */
+  private render(alpha: number): void {
+    const w = this.world;
+
+    this.ape.x = w.ape.x;
+    this.ape.y = lerp(w.ape.prevY, w.ape.y, alpha);
+
+    if (w.shot) {
+      if (!this.shotDot) this.shotDot = this.add.circle(0, 0, 5, 0xffffff);
+      this.shotDot.setPosition(
+        lerp(w.shot.prevPos.x, w.shot.state.pos.x, alpha),
+        lerp(w.shot.prevPos.y, w.shot.state.pos.y, alpha),
+      );
+    } else if (this.shotDot) {
+      this.shotDot.destroy();
+      this.shotDot = null;
+    }
+
+    this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
+    this.drawAim();
+    this.hud.setText(
+      `Wind: ${w.wind.toFixed(0)}   Angle: ${(w.aim.angle * 180 / Math.PI).toFixed(0)}°   Tick: ${w.tick}   [↑/↓ aim, hold SPACE = power, T = save tape]`,
+    );
   }
 
   private drawAim(): void {
-    const m = this.muzzle();
+    const m = muzzle(this.world);
     const len = 60;
-    this.aimLine.setTo(m.x, m.y, m.x + Math.cos(this.aim.angle) * len, m.y - Math.sin(this.aim.angle) * len);
+    this.aimLine.setTo(m.x, m.y, m.x + Math.cos(this.world.aim.angle) * len, m.y - Math.sin(this.world.aim.angle) * len);
   }
 }

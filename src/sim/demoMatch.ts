@@ -1,0 +1,28 @@
+/**
+ * A scripted demo match, shared by the replay test and the replay CLI so both
+ * exercise the exact same input sequence. Covers every sim path: raise aim,
+ * charge, fire, flight, detonation (terrain carve + wind re-roll), then settle.
+ */
+import { TickInput } from './World';
+import { GameTape, createTape, recordTick } from './tape';
+
+const idle: TickInput = {
+  aimUp: false, aimDown: false, fireHeld: false, firePressed: false, fireReleased: false,
+};
+const mk = (over: Partial<TickInput>): TickInput => ({ ...idle, ...over });
+
+export function demoInputs(): TickInput[] {
+  const inputs: TickInput[] = [];
+  for (let t = 0; t < 12; t++) inputs.push(mk({ aimUp: true })); // raise angle
+  inputs.push(mk({ firePressed: true, fireHeld: true })); // begin charge
+  for (let t = 0; t < 40; t++) inputs.push(mk({ fireHeld: true })); // hold to charge
+  inputs.push(mk({ fireReleased: true })); // launch
+  for (let t = 0; t < 250; t++) inputs.push(idle); // flight + detonation + settle
+  return inputs;
+}
+
+export function demoTape(seed: number, width: number, height: number): GameTape {
+  const tape = createTape(seed, width, height);
+  for (const input of demoInputs()) recordTick(tape, input);
+  return tape;
+}
