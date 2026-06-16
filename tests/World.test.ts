@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD,
+  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
 } from '../src/sim/World';
 
 const W = 1280;
@@ -62,6 +62,42 @@ describe('detonation damage + knockback', () => {
     const a = w.apes[0];
     detonateAt(w, a.x - 10, a.y, 60, 30); // blast to the LEFT of the ape
     expect(a.velX).toBeGreaterThan(0); // pushed right
+  });
+});
+
+// helper: a tick input with overrides
+const mk = (o: Partial<typeof idle>) => ({ ...idle, ...o });
+
+// fire the active ape: press, hold a few ticks, release
+function fireActive(w: ReturnType<typeof createWorld>): void {
+  stepWorld(w, mk({ firePressed: true, fireHeld: true }));
+  for (let i = 0; i < 20; i++) stepWorld(w, mk({ fireHeld: true }));
+  stepWorld(w, mk({ fireReleased: true }));
+}
+
+describe('turn state machine', () => {
+  it('passes the turn to the other team after a shot resolves and the world settles', () => {
+    const w = createWorld(1234, W, H);
+    expect(w.apes[w.activeApe].team).toBe(0);
+    fireActive(w);
+    for (let i = 0; i < 600 && w.phase !== 'AIMING'; i++) stepWorld(w, idle);
+    expect(w.phase).toBe('AIMING');
+    expect(w.apes[w.activeApe].team).toBe(1); // switched teams
+  });
+
+  it('ends a turn when the aim timer expires without firing', () => {
+    const w = createWorld(1234, W, H);
+    const team0 = w.apes[w.activeApe].team;
+    for (let i = 0; i < TURN_TICKS + 5; i++) stepWorld(w, idle);
+    expect(w.apes[w.activeApe].team).not.toBe(team0); // rotated to the other team
+  });
+
+  it('ignores fire input while it is not the AIMING phase', () => {
+    const w = createWorld(1234, W, H);
+    fireActive(w);
+    const hadShot = w.shot;
+    stepWorld(w, mk({ firePressed: true, fireReleased: true }));
+    if (w.phase === 'RESOLVING') expect(w.shot).toBe(hadShot);
   });
 });
 

@@ -139,18 +139,80 @@ export function muzzle(world: WorldState): Vec2 {
 export function stepWorld(world: WorldState, input: TickInput): void {
   world.events.length = 0;
 
-  const aim = world.aim;
-  if (input.aimUp) adjustAngle(aim, 1, FIXED_DT);
-  if (input.aimDown) adjustAngle(aim, -1, FIXED_DT);
-  if (!world.shot) {
-    if (input.firePressed) startCharge(aim);
-    if (input.fireHeld) updateCharge(aim, FIXED_DT);
-    if (input.fireReleased) fire(world, release(aim));
+  if (world.phase === 'GAMEOVER') {
+    settleApes(world);
+    world.tick++;
+    return;
   }
 
-  settleApes(world);
+  if (world.phase === 'AIMING') {
+    const aim = world.aim;
+    if (input.aimUp) adjustAngle(aim, 1, FIXED_DT);
+    if (input.aimDown) adjustAngle(aim, -1, FIXED_DT);
+    if (!world.shot) {
+      if (input.firePressed) startCharge(aim);
+      if (input.fireHeld) updateCharge(aim, FIXED_DT);
+      if (input.fireReleased) fire(world, release(aim));
+      if (world.shot) {
+        // Shot just launched — enter RESOLVING immediately.
+        world.phase = 'RESOLVING';
+        world.resolveTimer = 0;
+      } else {
+        world.turnTimer--;
+        if (world.turnTimer <= 0) world.phase = 'TURN_END';
+      }
+    }
+  }
+
   advanceShot(world);
+  settleApes(world);
+
+  if (world.phase === 'RESOLVING') {
+    world.resolveTimer++;
+    if (worldAtRest(world) || world.resolveTimer >= RESOLVE_MAX_TICKS) {
+      world.phase = 'TURN_END';
+    }
+  }
+
+  if (world.phase === 'TURN_END') endTurn(world);
+
   world.tick++;
+}
+
+/** No shot in flight and every living ape is motionless. */
+function worldAtRest(world: WorldState): boolean {
+  if (world.shot) return false;
+  for (const ape of world.apes) {
+    if (!alive(ape, world.height)) continue;
+    if (ape.velX !== 0 || ape.velY !== 0) return false;
+  }
+  return true;
+}
+
+/** Rotate to the next ape on the other team and start a fresh AIMING turn. */
+function endTurn(world: WorldState): void {
+  // Task 5 inserts the win check here.
+  const nextTeam = 1 - world.apes[world.activeApe].team;
+  world.activeApe = nextApeOnTeam(world, nextTeam);
+  rerollTurn(world);
+  world.phase = 'AIMING';
+}
+
+/** Plain round-robin within a team (no death handling; Task 5 upgrades this). */
+function nextApeOnTeam(world: WorldState, team: number): number {
+  const roster = teamApeIndices(world, team);
+  const pos = world.teamNext[team] % roster.length;
+  world.teamNext[team] = (pos + 1) % roster.length;
+  return roster[pos];
+}
+
+function rerollTurn(world: WorldState): void {
+  const roll = nextRandom(world.rng);
+  world.rng = roll.next;
+  world.wind = (roll.value * 2 - 1) * MAX_WIND;
+  world.aim = createAim();
+  world.turnTimer = TURN_TICKS;
+  world.resolveTimer = 0;
 }
 
 function fire(world: WorldState, power: number): void {
