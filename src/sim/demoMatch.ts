@@ -26,3 +26,18 @@ export function demoTape(seed: number, width: number, height: number): GameTape 
   for (const input of demoInputs()) recordTick(tape, input);
   return tape;
 }
+
+/** Two full turns: team 0 fires, settles, team 1 fires. Exercises the turn handoff. */
+export function turnLoopInputs(): TickInput[] {
+  const inputs: TickInput[] = [];
+  const fireOnce = (): void => {
+    for (let t = 0; t < 10; t++) inputs.push(mk({ aimUp: true }));
+    inputs.push(mk({ firePressed: true, fireHeld: true }));
+    for (let t = 0; t < 30; t++) inputs.push(mk({ fireHeld: true }));
+    inputs.push(mk({ fireReleased: true }));
+    for (let t = 0; t < 500; t++) inputs.push(idle); // flight + settle + handoff
+  };
+  fireOnce(); // team 0
+  fireOnce(); // team 1
+  return inputs;
+}
