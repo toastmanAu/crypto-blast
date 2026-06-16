@@ -189,21 +189,40 @@ function worldAtRest(world: WorldState): boolean {
   return true;
 }
 
+function countAlive(world: WorldState, team: number): number {
+  let n = 0;
+  for (const ape of world.apes) if (ape.team === team && alive(ape, world.height)) n++;
+  return n;
+}
+
 /** Rotate to the next ape on the other team and start a fresh AIMING turn. */
 function endTurn(world: WorldState): void {
-  // Task 5 inserts the win check here.
+  const a0 = countAlive(world, 0);
+  const a1 = countAlive(world, 1);
+  if (a0 === 0 || a1 === 0) {
+    world.winner = a0 === 0 && a1 === 0 ? -1 : a0 === 0 ? 1 : 0;
+    world.phase = 'GAMEOVER';
+    return;
+  }
   const nextTeam = 1 - world.apes[world.activeApe].team;
-  world.activeApe = nextApeOnTeam(world, nextTeam);
+  world.activeApe = nextLivingApeOnTeam(world, nextTeam);
   rerollTurn(world);
   world.phase = 'AIMING';
 }
 
-/** Plain round-robin within a team (no death handling; Task 5 upgrades this). */
-function nextApeOnTeam(world: WorldState, team: number): number {
+/** Next LIVING ape on a team, advancing the per-team cursor and skipping corpses. */
+function nextLivingApeOnTeam(world: WorldState, team: number): number {
   const roster = teamApeIndices(world, team);
-  const pos = world.teamNext[team] % roster.length;
-  world.teamNext[team] = (pos + 1) % roster.length;
-  return roster[pos];
+  const start = world.teamNext[team] % roster.length;
+  for (let k = 0; k < roster.length; k++) {
+    const pos = (start + k) % roster.length;
+    const idx = roster[pos];
+    if (alive(world.apes[idx], world.height)) {
+      world.teamNext[team] = (pos + 1) % roster.length;
+      return idx;
+    }
+  }
+  return world.activeApe; // unreachable: win check guarantees a living ape exists
 }
 
 function rerollTurn(world: WorldState): void {

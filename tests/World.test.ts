@@ -101,6 +101,32 @@ describe('turn state machine', () => {
   });
 });
 
+function killTeam(w: ReturnType<typeof createWorld>, team: number): void {
+  for (const a of w.apes) if (a.team === team) a.health = 0;
+}
+
+describe('win check + rotation', () => {
+  it('declares the other team the winner when a team is wiped out', () => {
+    const w = createWorld(1234, W, H);
+    killTeam(w, 1); // team 1 all dead
+    fireActive(w); // active is team 0; after this turn ends the win check runs
+    for (let i = 0; i < 600 && w.phase !== 'GAMEOVER' && w.phase !== 'AIMING'; i++) stepWorld(w, idle);
+    expect(w.phase).toBe('GAMEOVER');
+    expect(w.winner).toBe(0);
+  });
+
+  it('skips dead apes when rotating to the next team', () => {
+    const w = createWorld(1234, W, H);
+    const t1 = teamApeIndices(w, 1);
+    w.apes[t1[0]].health = 0; // first team-1 ape is dead
+    fireActive(w);
+    for (let i = 0; i < 600 && w.phase !== 'AIMING'; i++) stepWorld(w, idle);
+    expect(w.phase).toBe('AIMING');
+    expect(w.activeApe).not.toBe(t1[0]); // did not hand the turn to a corpse
+    expect(alive(w.apes[w.activeApe], H)).toBe(true);
+  });
+});
+
 describe('2D ape physics', () => {
   it('moves an ape horizontally with velX and stops at a wall, then friction brings it to rest', () => {
     const w = createWorld(1234, W, H);
