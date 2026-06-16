@@ -29,6 +29,8 @@ export const RESOLVE_MAX_TICKS = 400; // 8 s spiral guard for the settle wait
 export const KNOCKBACK = 320; // px/s impulse at blast centre
 export const FALL_DAMAGE_THRESHOLD = 600; // px/s landing speed before damage
 export const FALL_DAMAGE_SCALE = 0.05; // health lost per px/s over the threshold
+const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
+const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
 
 export type Phase = 'AIMING' | 'RESOLVING' | 'TURN_END' | 'GAMEOVER';
 const PHASE_ORDER: Phase[] = ['AIMING', 'RESOLVING', 'TURN_END', 'GAMEOVER'];
@@ -165,20 +167,37 @@ function fire(world: WorldState, power: number): void {
   };
 }
 
-/** 1D settle for now; Task 3 makes it 2D with fall/water damage. */
 function settleApes(world: WorldState): void {
   for (const ape of world.apes) {
     ape.prevX = ape.x;
     ape.prevY = ape.y;
+    if (!alive(ape, world.height)) continue; // dead apes don't move
+
+    // Horizontal: integrate velX, stop dead at a solid wall (probe at mid-height).
+    if (ape.velX !== 0) {
+      const nx = ape.x + ape.velX * FIXED_DT;
+      if (isSolid(world.mask, nx, ape.y)) ape.velX = 0;
+      else ape.x = nx;
+    }
+
+    // Vertical: gravity while airborne; on landing apply fall damage + friction.
     const feetY = ape.y + APE_HEIGHT / 2;
     if (!isSolid(world.mask, ape.x, feetY + 1)) {
       ape.velY += APE_GRAVITY * FIXED_DT;
       ape.y += ape.velY * FIXED_DT;
     } else {
+      if (ape.velY > FALL_DAMAGE_THRESHOLD) {
+        ape.health -= FALL_DAMAGE_SCALE * (ape.velY - FALL_DAMAGE_THRESHOLD);
+      }
       ape.velY = 0;
+      ape.velX *= GROUND_FRICTION;
+      if (Math.abs(ape.velX) < REST_EPSILON) ape.velX = 0;
     }
-    if (ape.y > world.height + 100) {
-      ape.y = world.height - 50;
+
+    // Water: clamp a fallen ape to a stable sentinel y (it's dead via alive()).
+    if (ape.y > world.height + 50) {
+      ape.y = world.height + 50;
+      ape.velX = 0;
       ape.velY = 0;
     }
   }

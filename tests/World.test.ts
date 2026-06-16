@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt,
+  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD,
 } from '../src/sim/World';
 
 const W = 1280;
@@ -62,5 +62,41 @@ describe('detonation damage + knockback', () => {
     const a = w.apes[0];
     detonateAt(w, a.x - 10, a.y, 60, 30); // blast to the LEFT of the ape
     expect(a.velX).toBeGreaterThan(0); // pushed right
+  });
+});
+
+describe('2D ape physics', () => {
+  it('moves an ape horizontally with velX and stops at a wall, then friction brings it to rest', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    a.velX = 100;
+    const startX = a.x;
+    stepWorld(w, idle); // one settle integrates velX
+    expect(a.x).toBeGreaterThan(startX); // moved right (open air or ground)
+  });
+
+  it('a grounded ape sheds horizontal velocity until at rest', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    a.velX = 50; // grounded ape (sitting on surface)
+    for (let i = 0; i < 60; i++) stepWorld(w, idle);
+    expect(a.velX).toBe(0);
+  });
+
+  it('an ape that falls past the bottom is dead (water)', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    a.y = H + 10; // below the field
+    expect(alive(a, H)).toBe(false);
+  });
+
+  it('applies fall damage when landing fast', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    a.velY = FALL_DAMAGE_THRESHOLD + 400;
+    a.y -= 2; // a hair above the ground so the next tick lands
+    const before = a.health;
+    for (let i = 0; i < 5; i++) stepWorld(w, idle);
+    expect(a.health).toBeLessThan(before);
   });
 });
