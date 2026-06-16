@@ -204,10 +204,42 @@ function advanceShot(world: WorldState): void {
   }
 }
 
-/** Carve only for now; Task 2 adds damage + knockback. */
 function detonate(world: WorldState, x: number, y: number, radius: number): void {
   carveCircle(world.mask, x, y, radius);
   world.events.push({ type: 'detonation', x, y, radius });
+  const weapon = WEAPONS.moonShot;
+  applyBlast(world, x, y, radius, weapon.damage);
+}
+
+/** Radial falloff damage + knockback to every living ape within `radius`. */
+function applyBlast(world: WorldState, x: number, y: number, radius: number, damage: number): void {
+  for (const ape of world.apes) {
+    if (!alive(ape, world.height)) continue;
+    const dx = ape.x - x;
+    const dy = ape.y - y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > radius) continue;
+    const falloff = 1 - d / radius;
+    ape.health -= damage * falloff;
+    let nx: number;
+    let ny: number;
+    if (d === 0) {
+      nx = 0;
+      ny = -1; // dead-centre: launch straight up
+    } else {
+      nx = dx / d;
+      ny = dy / d;
+    }
+    const impulse = KNOCKBACK * falloff;
+    ape.velX += nx * impulse;
+    ape.velY += ny * impulse;
+  }
+}
+
+/** Test seam: drive a blast directly without scripting a full shot. */
+export function detonateAt(world: WorldState, x: number, y: number, radius: number, damage: number): void {
+  carveCircle(world.mask, x, y, radius);
+  applyBlast(world, x, y, radius, damage);
 }
 
 /** Deterministic FNV-1a fingerprint over the full world. Field order is FINAL. */

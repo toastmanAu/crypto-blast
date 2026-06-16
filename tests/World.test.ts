@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH,
+  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt,
 } from '../src/sim/World';
 
 const W = 1280;
@@ -43,5 +43,24 @@ describe('hashWorld', () => {
     const again = createWorld(7, W, H);
     stepWorld(again, idle);
     expect(hashWorld(w)).toBe(hashWorld(again));
+  });
+});
+
+describe('detonation damage + knockback', () => {
+  it('damages apes within the blast radius, scaled by proximity, and ignores far ones', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    const before = a.health;
+    detonateAt(w, a.x, a.y, 50, 40); // radius 50, damage 40, centre hit
+    expect(a.health).toBe(before - 40); // full damage at d=0
+    const far = w.apes[w.apes.length - 1];
+    expect(far.health).toBe(100);
+  });
+
+  it('applies knockback impulse away from the blast', () => {
+    const w = createWorld(1234, W, H);
+    const a = w.apes[0];
+    detonateAt(w, a.x - 10, a.y, 60, 30); // blast to the LEFT of the ape
+    expect(a.velX).toBeGreaterThan(0); // pushed right
   });
 });
