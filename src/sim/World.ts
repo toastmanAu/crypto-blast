@@ -197,6 +197,7 @@ function countAlive(world: WorldState, team: number): number {
 
 /** Rotate to the next ape on the other team and start a fresh AIMING turn. */
 function endTurn(world: WorldState): void {
+  world.shot = null; // discard any projectile still in flight if the resolve guard fired
   const a0 = countAlive(world, 0);
   const a1 = countAlive(world, 1);
   if (a0 === 0 || a1 === 0) {
@@ -296,9 +297,6 @@ function advanceShot(world: WorldState): void {
     if (isSolid(world.mask, x, y) || offscreen) {
       if (!offscreen) detonate(world, x, y, weapon.blastRadius);
       world.shot = null;
-      const roll = nextRandom(world.rng);
-      world.rng = roll.next;
-      world.wind = (roll.value * 2 - 1) * MAX_WIND;
       return;
     }
   }

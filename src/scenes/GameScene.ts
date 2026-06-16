@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
 import { GAME_WIDTH, GAME_HEIGHT } from '../main';
 import { TerrainRenderer } from '../render/TerrainRenderer';
-import { FIXED_DT, MAX_STEPS_PER_FRAME, drainAccumulator, lerp } from '../core/time';
+import { FIXED_DT, FIXED_HZ, MAX_STEPS_PER_FRAME, drainAccumulator, lerp } from '../core/time';
 import {
-  WorldState, TickInput, SimEvent, APE_WIDTH, APE_HEIGHT,
+  WorldState, TickInput, SimEvent, APE_WIDTH, APE_HEIGHT, APE_MAX_HEALTH,
   createWorld, stepWorld, muzzle, hashWorld,
 } from '../sim/World';
 import { GameTape, createTape, recordTick } from '../sim/tape';
@@ -181,7 +181,7 @@ export class GameScene extends Phaser.Scene {
       const bar = this.healthBars[i];
       bar.setVisible(liveApe);
       if (liveApe) {
-        const frac = Math.max(0, ape.health) / 100;
+        const frac = Math.max(0, ape.health) / APE_MAX_HEALTH;
         bar.width = APE_WIDTH * frac;
         bar.x = rx - APE_WIDTH / 2;
         bar.y = ry - APE_HEIGHT / 2 - 8;
@@ -213,7 +213,7 @@ export class GameScene extends Phaser.Scene {
     if (showMarker) this.drawAim();
 
     const teamName = active.team === 0 ? 'GREEN' : 'PINK';
-    const secs = Math.ceil(w.turnTimer / 50);
+    const secs = Math.ceil(w.turnTimer / FIXED_HZ);
     this.hud.setText(
       `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Angle ${(w.aim.angle * 180 / Math.PI).toFixed(0)}°   [↑/↓ aim · hold SPACE · T save]`,
     );
