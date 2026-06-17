@@ -176,7 +176,8 @@
       "tileSize": [
         512,
         512
-      ]
+      ],
+      "tiling": "both"
     },
     {
       "key": "terrainRock",
@@ -190,7 +191,23 @@
       "tileSize": [
         512,
         512
-      ]
+      ],
+      "tiling": "both"
+    },
+    {
+      "key": "terrainGrass",
+      "kind": "terrainSet",
+      "files": [
+        "sprites/terrain/grass_00.png",
+        "sprites/terrain/grass_01.png",
+        "sprites/terrain/grass_02.png"
+      ],
+      "count": 3,
+      "tileSize": [
+        1024,
+        256
+      ],
+      "tiling": "horizontal"
     },
     {
       "key": "apeWalk",

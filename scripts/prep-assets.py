@@ -68,14 +68,17 @@ BACKGROUNDS = [
     ("bg_mid", "bgMid"),   # D6 parallax mid (islands)
 ]
 
-# TERRAIN: (manifest_key, source_glob_prefix, output_name) — seamless tileable
-# textures grouped as a variant SET. Opaque RGB; copied full-frame (NO trim — that
-# would break edge-wrap seamlessness — and NO key). The engine picks one variant
-# per match seeded from the match RNG (render-only; does not touch the physics
-# mask / sim hash). Count is variable; new variants drop in and are picked up.
+# TERRAIN: (manifest_key, source_glob_prefix, output_name, rgba, tiling) —
+# seamless tileable textures grouped as a variant SET. Copied full-frame (NO trim —
+# that would break edge-wrap seamlessness — and NO key). The engine picks one
+# variant per match seeded from the match RNG (render-only; does not touch the
+# physics mask / sim hash). Count is variable; new variants drop in automatically.
+#   rgba   — keep alpha (grass tufts sit on a transparent sky band); else flatten RGB.
+#   tiling — "both" (body tiles wrap H+V) or "horizontal" (grass cap: L-R only).
 TERRAIN = [
-    ("terrainDirt", "bg_dirt_",  "dirt"),
-    ("terrainRock", "bg_rocks_", "rock"),
+    ("terrainDirt",  "bg_dirt_",  "dirt",  False, "both"),
+    ("terrainRock",  "bg_rocks_", "rock",  False, "both"),
+    ("terrainGrass", "grass_",    "grass", True,  "horizontal"),
 ]
 
 # SHEET: (output_key, [source_stems...], mode, fps, facing, aggressive_despill)
@@ -151,7 +154,7 @@ def prep_pivoted(stem, key, origin, facing):
     }
 
 
-def prep_terrain_set(key, prefix, outname):
+def prep_terrain_set(key, prefix, outname, rgba=False, tiling="both"):
     """Group a set of seamless tiles. Copied full-frame (no trim/key). Returns one
     manifest entry listing all variant files so the engine can pick one per match."""
     srcs = sorted(glob.glob(str(SRC / f"{prefix}*.png")))
@@ -159,7 +162,7 @@ def prep_terrain_set(key, prefix, outname):
     tile_dir.mkdir(parents=True, exist_ok=True)
     files, sizes = [], set()
     for i, src in enumerate(srcs):
-        im = Image.open(src).convert("RGB")
+        im = Image.open(src).convert("RGBA" if rgba else "RGB")
         sizes.add(im.size)
         rel = f"sprites/terrain/{outname}_{i:02d}.png"
         im.save(OUT / "terrain" / f"{outname}_{i:02d}.png")
@@ -169,7 +172,7 @@ def prep_terrain_set(key, prefix, outname):
     w, h = next(iter(sizes)) if sizes else (0, 0)
     return {
         "key": key, "kind": "terrainSet", "files": files,
-        "count": len(files), "tileSize": [w, h],
+        "count": len(files), "tileSize": [w, h], "tiling": tiling,
     }
 
 
