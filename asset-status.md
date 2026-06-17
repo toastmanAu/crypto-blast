@@ -33,7 +33,7 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 - `explosion.png` is 2.2 MB (5 large frames) — run through pngquant/oxipng before shipping.
 
 ## Tooling split (important)
-- **Single static sprites → Flux 2** (Wyltek Studio): weapons batch, terrain tiles, UI/HUD, single ape poses. Sharp vector-cartoon look; no cross-image memory, so multi-frame coherence needs seed-lock + manual phase swaps (a workaround).
+- **Single static sprites + seamless tiles → Flux 2 Klieb 8b** (Wyltek Studio): weapons batch, terrain tiles, UI/HUD, single ape poses. Sharp vector-cartoon look; no cross-image memory, so multi-frame coherence needs seed-lock + manual phase swaps (a workaround). **Seamless tiling is reliable** — the 16-tile terrain wave passed seam-metric + 2×2 montage across the board (exclusions were aesthetic, not broken wraps).
 - **Multi-frame animation sets → GPT image gen**: walk (A4), jump (A5), explosion strip. Flux couldn't reason across frames in one shot; GPT plans the whole sequence coherently. GPT emits the frames as a **single contact sheet** — currently chopped into individual frames **by hand** (uniform grid → consistent per-frame sizes, which is why these are pre-registered). Candidate to automate with a PIL grid-slicer.
 - ⚠️ `flux-prompts.md` entries A4 (walk) and the explosion strip are therefore **superseded** — those were produced via GPT, not Flux. Treat the Flux prompts for those as historical.
 
@@ -81,8 +81,8 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 ## Batch C — Terrain materials (seamless)
 | ID | Prompt | Status |
 |----|--------|--------|
-| C1 | Dirt body tile | ❌ |
-| C2 | Rock / bedrock tile | ❌ |
+| C1 | Dirt body tile | ✅ ×13 (`terrainDirt` set, seamless) |
+| C2 | Rock / bedrock tile | ✅ ×3 (`terrainRock` set, seamless) |
 | C3 | Grass cap edge strip | ❌ |
 | C4 | Glow crystal accent | ❌ |
 
@@ -101,4 +101,4 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 - **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
 - **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
 - **Effects:** all 4 ✅ — explosion, muzzle flash, water splash, smoke puff. **Complete.**
-- **Terrain (C):** 0/4. **UI/HUD (D):** 0/7.
+- **Terrain (C):** 2/4 — dirt ×13 + rock ×3 (seamless, grouped sets, randomised per match seed). Grass-edge (C3) + crystal (C4) pending. **UI/HUD (D):** 0/7.
