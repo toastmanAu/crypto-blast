@@ -44,6 +44,7 @@ STATIC = [
     ("Bridge",               "bridge",         "bridge",         None),
     ("splash",               "waterSplash",    None,             None),
     ("smoke",                "smokePuff",      None,             None),
+    ("muzzle_flash",         "muzzleFlash",    None,             None),
     ("default_ape",          "apeIdle",        None,             "left"),
     ("worried_ape",          "apeHurt",        None,             "left"),
 ]

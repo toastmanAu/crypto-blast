@@ -119,6 +119,14 @@
       "height": 322
     },
     {
+      "key": "muzzleFlash",
+      "kind": "image",
+      "file": "sprites/muzzleFlash.png",
+      "width": 592,
+      "height": 553,
+      "magentaCleaned": 5756
+    },
+    {
       "key": "apeIdle",
       "kind": "image",
       "file": "sprites/apeIdle.png",
