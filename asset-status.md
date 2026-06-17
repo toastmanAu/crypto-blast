@@ -91,7 +91,7 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 | C1 | Dirt body tile | ✅ ×13 (`terrainDirt` set, seamless) |
 | C2 | Rock / bedrock tile | ✅ ×3 (`terrainRock` set, seamless) |
 | C3 | Grass cap edge strip | ✅ ×3 (`terrainGrass` set, RGBA, H-tile only) |
-| C4 | Glow crystal accent | ❌ |
+| C4 | Glow crystal accent | ✅ ×7 (`decorCrystal` set, trim-only, no key — pink crystals) |
 
 ## Batch D — UI / HUD / backgrounds
 | ID | Prompt | Status |
@@ -108,4 +108,4 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 - **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
 - **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
 - **Effects:** all 4 ✅ — explosion, muzzle flash, water splash, smoke puff. **Complete.**
-- **Terrain (C):** 3/4 — dirt ×13 + rock ×3 (opaque, H+V seamless) + grass cap ×3 (RGBA, H-tile only). Grouped sets, randomised per match seed. Crystal accent (C4) pending. **UI/HUD (D):** 0/7.
+- **Terrain (C):** 4/4 ✅ — dirt ×13 + rock ×3 (opaque, H+V seamless) + grass cap ×3 (RGBA, H-tile only) + crystal accent ×7 (decor, scatter). Grouped sets, randomised per match seed. **Complete.** **UI/HUD (D):** 0/7.
