@@ -75,8 +75,8 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 |--------|------|--------|
 | Explosion strip (5 frames) | `explosion_0.png`–`explosion_4.png` | ✅ (needs canvas normalization) |
 | Muzzle flash | — | ❌ |
-| Water splash | — | ❌ |
-| Smoke puff | — | ❌ |
+| Water splash | `splash.png` | ✅ |
+| Smoke puff | `smoke.png` | ✅ |
 
 ## Batch C — Terrain materials (seamless)
 | ID | Prompt | Status |
@@ -100,5 +100,5 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 ## Summary
 - **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
 - **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
-- **Effects:** explosion ✅ (normalize first); muzzle flash / splash / smoke ❌.
+- **Effects:** explosion + water splash + smoke puff ✅; only **muzzle flash** ❌.
 - **Terrain (C):** 0/4. **UI/HUD (D):** 0/7.

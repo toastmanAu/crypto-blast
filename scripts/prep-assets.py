@@ -42,6 +42,8 @@ STATIC = [
     ("whale_bomb",           "whaleDump",      "whaleDump",      "left"),
     ("honey_pot",            "honeypotMine",   "honeypotMine",   None),
     ("Bridge",               "bridge",         "bridge",         None),
+    ("splash",               "waterSplash",    None,             None),
+    ("smoke",                "smokePuff",      None,             None),
     ("default_ape",          "apeIdle",        None,             "left"),
     ("worried_ape",          "apeHurt",        None,             "left"),
 ]
