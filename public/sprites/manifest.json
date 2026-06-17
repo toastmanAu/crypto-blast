@@ -210,6 +210,52 @@
       "tiling": "horizontal"
     },
     {
+      "key": "decorCrystal",
+      "kind": "decorSet",
+      "files": [
+        {
+          "file": "sprites/decor/crystal_00.png",
+          "width": 268,
+          "height": 315
+        },
+        {
+          "file": "sprites/decor/crystal_01.png",
+          "width": 282,
+          "height": 326
+        },
+        {
+          "file": "sprites/decor/crystal_02.png",
+          "width": 270,
+          "height": 253
+        },
+        {
+          "file": "sprites/decor/crystal_03.png",
+          "width": 305,
+          "height": 362
+        },
+        {
+          "file": "sprites/decor/crystal_04.png",
+          "width": 227,
+          "height": 292
+        },
+        {
+          "file": "sprites/decor/crystal_05.png",
+          "width": 263,
+          "height": 303
+        },
+        {
+          "file": "sprites/decor/crystal_06.png",
+          "width": 263,
+          "height": 297
+        }
+      ],
+      "count": 7,
+      "origin": [
+        0.5,
+        1.0
+      ]
+    },
+    {
       "key": "apeWalk",
       "kind": "spritesheet",
       "file": "sprites/apeWalk.png",
