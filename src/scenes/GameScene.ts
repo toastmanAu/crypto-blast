@@ -8,14 +8,23 @@ import {
 } from '../sim/World';
 import { GameTape, createTape, recordTick } from '../sim/tape';
 import { aimAngle } from '../core/aim';
+import { isSolid } from '../physics/DestructibleTerrain';
 import { downloadJson } from '../util/download';
 
-// Source frame size of the explosion spritesheet (public/sprites/manifest.json).
+// Spritesheet frame sizes (public/sprites/manifest.json).
 const EXPLOSION_FRAME_W = 969;
 const EXPLOSION_FRAME_H = 878;
+const APE_WALK_FRAME = { w: 615, h: 616 };
+const APE_JUMP_FRAME = { w: 613, h: 613 };
 const APE_TINT_TEAM1 = 0xff8fb0; // the one ape sprite is green; tint team 1 pink
 const TEAM0_COLOUR = 0x33ddaa;   // green team marker pad
 const TEAM1_COLOUR = 0xdd5577;   // pink team marker pad
+const APE_DISPLAY_H = APE_HEIGHT * 1.5; // on-screen ape height (sprites scale to this)
+const APE_MOVE_EPS = 6;          // px/s on the ground above which the ape "walks"
+const JUMP_VY_EPS = 60;          // |velY| band around the apex for the peak frame
+
+// idle art faces LEFT; walk/jump art faces RIGHT (manifest facings differ).
+type ApeAnim = 'idle' | 'walk' | 'air';
 
 const POWER_BAR_WIDTH = 200;
 // Fixed for now; later the match seed comes from the lobby / chain.
@@ -52,7 +61,8 @@ export class GameScene extends Phaser.Scene {
 
   // Render-only objects.
   private teamMarkers: Phaser.GameObjects.Ellipse[] = [];
-  private apeSprites: Phaser.GameObjects.Image[] = [];
+  private apeSprites: Phaser.GameObjects.Sprite[] = [];
+  private apeAnimState: ApeAnim[] = [];
   private healthBars: Phaser.GameObjects.Rectangle[] = [];
   private activeMarker!: Phaser.GameObjects.Triangle;
   private banner!: Phaser.GameObjects.Text;
@@ -80,6 +90,12 @@ export class GameScene extends Phaser.Scene {
     this.load.spritesheet('explosion', 'sprites/explosion.png', {
       frameWidth: EXPLOSION_FRAME_W, frameHeight: EXPLOSION_FRAME_H,
     });
+    this.load.spritesheet('apeWalk', 'sprites/apeWalk.png', {
+      frameWidth: APE_WALK_FRAME.w, frameHeight: APE_WALK_FRAME.h,
+    });
+    this.load.spritesheet('apeJump', 'sprites/apeJump.png', {
+      frameWidth: APE_JUMP_FRAME.w, frameHeight: APE_JUMP_FRAME.h,
+    });
   }
 
   create(): void {
@@ -94,6 +110,12 @@ export class GameScene extends Phaser.Scene {
       frames: this.anims.generateFrameNumbers('explosion', { start: 0, end: 4 }),
       frameRate: 18,
     });
+    this.anims.create({
+      key: 'apeWalkCycle',
+      frames: this.anims.generateFrameNumbers('apeWalk', { start: 0, end: 3 }),
+      frameRate: 10,
+      repeat: -1,
+    });
 
     // Team-coloured pad under each ape's feet (added BEFORE the sprites so it
     // draws underneath). This is what distinguishes the teams at a glance.
@@ -104,13 +126,15 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    // One green ape sprite, scaled to the collision height and bottom-anchored at
-    // the feet; team 1 is tinted pink. Facing is set each frame in render().
+    // Ape sprites: bottom-anchored at the feet, scaled to a common display height.
+    // Texture/anim (idle/walk/jump) is chosen each frame in render() from velocities;
+    // team 1 is tinted pink. Facing is set each frame too.
     for (const ape of this.world.apes) {
-      const sprite = this.add.image(ape.x, ape.y + APE_HEIGHT / 2, 'apeIdle').setOrigin(0.5, 1);
-      sprite.setScale((APE_HEIGHT * 1.5) / sprite.height);
+      const sprite = this.add.sprite(ape.x, ape.y + APE_HEIGHT / 2, 'apeIdle').setOrigin(0.5, 1);
+      this.scaleApe(sprite);
       if (ape.team === 1) sprite.setTint(APE_TINT_TEAM1);
       this.apeSprites.push(sprite);
+      this.apeAnimState.push('idle');
     }
 
     for (let i = 0; i < this.world.apes.length; i++) {
@@ -229,10 +253,28 @@ export class GameScene extends Phaser.Scene {
       const sprite = this.apeSprites[i];
       sprite.x = rx;
       sprite.y = ry + APE_HEIGHT / 2; // bottom-anchored at the feet
-      // Art faces left; flip to face right. Active ape follows its aim; others face the enemy.
-      const facingRight = i === w.activeApe ? w.aim.facing > 0 : ape.team === 0;
-      sprite.flipX = facingRight;
       sprite.setAlpha(liveApe ? 1 : 0.2);
+
+      // Pick animation state from sim velocities + terrain (render-only).
+      const grounded = isSolid(w.mask, ape.x, ape.y + APE_HEIGHT / 2 + 1);
+      let state: ApeAnim;
+      if (!liveApe || (grounded && Math.abs(ape.velX) <= APE_MOVE_EPS)) state = 'idle';
+      else if (!grounded) state = 'air';
+      else state = 'walk';
+
+      if (state !== this.apeAnimState[i]) {
+        this.apeAnimState[i] = state;
+        this.applyApeState(sprite, state);
+      }
+      // Airborne: choose the jump frame by vertical velocity (rising→launch, apex→peak, falling→land).
+      if (state === 'air') {
+        sprite.setFrame(ape.velY < -JUMP_VY_EPS ? 1 : ape.velY > JUMP_VY_EPS ? 3 : 2);
+      }
+
+      // Facing: idle art faces LEFT, walk/jump face RIGHT — so the flip inverts by texture.
+      const facingRight = i === w.activeApe ? w.aim.facing > 0 : ape.team === 0;
+      const artFacesRight = state !== 'idle';
+      sprite.flipX = artFacesRight ? !facingRight : facingRight;
 
       const bar = this.healthBars[i];
       bar.setVisible(liveApe);
@@ -286,6 +328,24 @@ export class GameScene extends Phaser.Scene {
       this.banner.setVisible(true);
       this.banner.setText(w.winner === -1 ? 'DRAW' : `TEAM ${w.winner === 0 ? 'GREEN' : 'PINK'} WINS`);
     }
+  }
+
+  /** Swap an ape sprite to the texture/anim for its state, re-scaling to display height. */
+  private applyApeState(sprite: Phaser.GameObjects.Sprite, state: ApeAnim): void {
+    if (state === 'walk') {
+      sprite.setTexture('apeWalk');
+      this.scaleApe(sprite);
+      sprite.play('apeWalkCycle');
+    } else {
+      sprite.anims.stop();
+      sprite.setTexture(state === 'air' ? 'apeJump' : 'apeIdle');
+      this.scaleApe(sprite);
+    }
+  }
+
+  /** Uniform scale so any ape texture renders at APE_DISPLAY_H tall (height is unscaled). */
+  private scaleApe(sprite: Phaser.GameObjects.Sprite): void {
+    sprite.setScale(APE_DISPLAY_H / sprite.height);
   }
 
   private drawAim(): void {
