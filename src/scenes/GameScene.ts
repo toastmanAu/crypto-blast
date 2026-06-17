@@ -9,7 +9,13 @@ import {
 import { GameTape, createTape, recordTick } from '../sim/tape';
 import { aimAngle } from '../core/aim';
 import { isSolid } from '../physics/DestructibleTerrain';
+import { nextRandom } from '../core/rng';
 import { downloadJson } from '../util/download';
+
+// Terrain variant counts (public/sprites/manifest.json terrainSet entries).
+const TERRAIN_DIRT_COUNT = 13;
+const TERRAIN_ROCK_COUNT = 3;
+const TERRAIN_GRASS_COUNT = 3;
 
 // Spritesheet frame sizes (public/sprites/manifest.json).
 const EXPLOSION_FRAME_W = 969;
@@ -96,13 +102,27 @@ export class GameScene extends Phaser.Scene {
     this.load.spritesheet('apeJump', 'sprites/apeJump.png', {
       frameWidth: APE_JUMP_FRAME.w, frameHeight: APE_JUMP_FRAME.h,
     });
+
+    // Per-match terrain set, seeded from MATCH_SEED (render-only, so same seed →
+    // same ground on replay; the texture choice never touches the physics mask).
+    const p2 = (n: number): string => String(n).padStart(2, '0');
+    const r1 = nextRandom(MATCH_SEED >>> 0);
+    const r2 = nextRandom(r1.next);
+    const r3 = nextRandom(r2.next);
+    this.load.image('terrainDirt', `sprites/terrain/dirt_${p2(Math.floor(r1.value * TERRAIN_DIRT_COUNT))}.png`);
+    this.load.image('terrainRock', `sprites/terrain/rock_${p2(Math.floor(r2.value * TERRAIN_ROCK_COUNT))}.png`);
+    this.load.image('terrainGrass', `sprites/terrain/grass_${p2(Math.floor(r3.value * TERRAIN_GRASS_COUNT))}.png`);
   }
 
   create(): void {
     this.world = createWorld(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
     this.tape = createTape(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
 
-    this.terrain = new TerrainRenderer(this, this.world.mask);
+    this.terrain = new TerrainRenderer(this, this.world.mask, {
+      dirt: this.texToImageData('terrainDirt'),
+      rock: this.texToImageData('terrainRock'),
+      grass: this.texToImageData('terrainGrass'),
+    });
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
 
     this.anims.create({
@@ -346,6 +366,17 @@ export class GameScene extends Phaser.Scene {
   /** Uniform scale so any ape texture renders at APE_DISPLAY_H tall (height is unscaled). */
   private scaleApe(sprite: Phaser.GameObjects.Sprite): void {
     sprite.setScale(APE_DISPLAY_H / sprite.height);
+  }
+
+  /** Read a loaded texture's pixels into ImageData (for CPU terrain tile sampling). */
+  private texToImageData(key: string): ImageData {
+    const src = this.textures.get(key).getSourceImage() as CanvasImageSource & { width: number; height: number };
+    const canvas = document.createElement('canvas');
+    canvas.width = src.width;
+    canvas.height = src.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(src, 0, 0);
+    return ctx.getImageData(0, 0, src.width, src.height);
   }
 
   private drawAim(): void {

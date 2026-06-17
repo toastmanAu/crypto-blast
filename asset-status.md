@@ -26,12 +26,11 @@ Per-asset pipeline:
 Sprite key → weapon id mapping lives in `manifest.json` (`weaponId` field) so P3 wiring is a
 lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `setFlipX` at wire time.
 
-**Deferred wiring (P5, touches shared `GameScene`/`TerrainRenderer` — coordinate w/ sim session):**
-- Terrain is currently a single procedural texture, not tile-based. To use the dirt/rock sets:
-  build tile rendering (stamp chosen dirt under the destructible mask, rock as bedrock), then
-  pick one `terrainDirt` + one `terrainRock` variant per match **seeded from the match RNG**
-  (`src/core/rng.ts`). Texture choice is **render-only** — does NOT touch the destructible mask
-  that feeds `hashWorld`, so same seed → same ground → identical replays, zero sim-hash impact.
+**Terrain tiling — DONE** (`TerrainRenderer` + `GameScene`): the mask-stencilled canvas samples
+real tiles — dirt body, rock below ROCK_DEPTH (bedrock), grass cap along the surface (blades
+rise above, green tucks below). One dirt/rock/grass variant is picked per match, **seeded from
+MATCH_SEED via `core/rng`** (render-only — never touches the mask that feeds `hashWorld`, so same
+seed → same ground → identical replays). Re-tiles on every carve.
 
 **Known residuals (cosmetic, sub-visible at game scale):**
 - Line art was antialiased against magenta, so black-outline edge pixels carry a faint cool/purple
