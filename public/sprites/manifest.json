@@ -105,6 +105,20 @@
       "weaponId": "bridge"
     },
     {
+      "key": "waterSplash",
+      "kind": "image",
+      "file": "sprites/waterSplash.png",
+      "width": 384,
+      "height": 696
+    },
+    {
+      "key": "smokePuff",
+      "kind": "image",
+      "file": "sprites/smokePuff.png",
+      "width": 410,
+      "height": 322
+    },
+    {
       "key": "apeIdle",
       "kind": "image",
       "file": "sprites/apeIdle.png",
