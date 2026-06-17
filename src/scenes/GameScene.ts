@@ -7,7 +7,13 @@ import {
   createWorld, stepWorld, muzzle, hashWorld,
 } from '../sim/World';
 import { GameTape, createTape, recordTick } from '../sim/tape';
+import { aimAngle } from '../core/aim';
 import { downloadJson } from '../util/download';
+
+// Source frame size of the explosion spritesheet (public/sprites/manifest.json).
+const EXPLOSION_FRAME_W = 969;
+const EXPLOSION_FRAME_H = 878;
+const APE_TINT_TEAM1 = 0xff8fb0; // the one ape sprite is green; tint team 1 pink
 
 const POWER_BAR_WIDTH = 200;
 // Fixed for now; later the match seed comes from the lobby / chain.
@@ -17,6 +23,8 @@ const MATCH_SEED = 1234;
 interface FrameInput {
   aimUp: boolean;
   aimDown: boolean;
+  aimLeft: boolean;
+  aimRight: boolean;
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
@@ -36,15 +44,16 @@ export class GameScene extends Phaser.Scene {
 
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
-    aimUp: false, aimDown: false, fireHeld: false, firePressed: false, fireReleased: false,
+    aimUp: false, aimDown: false, aimLeft: false, aimRight: false,
+    fireHeld: false, firePressed: false, fireReleased: false,
   };
 
   // Render-only objects.
-  private apeRects: Phaser.GameObjects.Rectangle[] = [];
+  private apeSprites: Phaser.GameObjects.Image[] = [];
   private healthBars: Phaser.GameObjects.Rectangle[] = [];
   private activeMarker!: Phaser.GameObjects.Triangle;
   private banner!: Phaser.GameObjects.Text;
-  private shotDot: Phaser.GameObjects.Arc | null = null;
+  private shotSprite: Phaser.GameObjects.Image | null = null;
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
@@ -52,12 +61,22 @@ export class GameScene extends Phaser.Scene {
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
     down: Phaser.Input.Keyboard.Key;
+    left: Phaser.Input.Keyboard.Key;
+    right: Phaser.Input.Keyboard.Key;
     fire: Phaser.Input.Keyboard.Key;
     save: Phaser.Input.Keyboard.Key;
   };
 
   constructor() {
     super('Game');
+  }
+
+  preload(): void {
+    this.load.image('apeIdle', 'sprites/apeIdle.png');
+    this.load.image('moonShot', 'sprites/moonShot.png');
+    this.load.spritesheet('explosion', 'sprites/explosion.png', {
+      frameWidth: EXPLOSION_FRAME_W, frameHeight: EXPLOSION_FRAME_H,
+    });
   }
 
   create(): void {
@@ -67,9 +86,19 @@ export class GameScene extends Phaser.Scene {
     this.terrain = new TerrainRenderer(this, this.world.mask);
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
 
+    this.anims.create({
+      key: 'explode',
+      frames: this.anims.generateFrameNumbers('explosion', { start: 0, end: 4 }),
+      frameRate: 18,
+    });
+
+    // One green ape sprite, scaled to the collision height and bottom-anchored at
+    // the feet; team 1 is tinted pink. Facing is set each frame in render().
     for (const ape of this.world.apes) {
-      const colour = ape.team === 0 ? 0x33ddaa : 0xdd5577;
-      this.apeRects.push(this.add.rectangle(ape.x, ape.y, APE_WIDTH, APE_HEIGHT, colour));
+      const sprite = this.add.image(ape.x, ape.y + APE_HEIGHT / 2, 'apeIdle').setOrigin(0.5, 1);
+      sprite.setScale((APE_HEIGHT * 1.5) / sprite.height);
+      if (ape.team === 1) sprite.setTint(APE_TINT_TEAM1);
+      this.apeSprites.push(sprite);
     }
 
     for (let i = 0; i < this.world.apes.length; i++) {
@@ -89,6 +118,8 @@ export class GameScene extends Phaser.Scene {
     this.keys = {
       up: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.UP),
       down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN),
+      left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT),
+      right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT),
       fire: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
       save: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T),
     };
@@ -131,6 +162,8 @@ export class GameScene extends Phaser.Scene {
   private sampleInput(): void {
     this.frameInput.aimUp = this.keys.up.isDown;
     this.frameInput.aimDown = this.keys.down.isDown;
+    this.frameInput.aimLeft = this.keys.left.isDown;
+    this.frameInput.aimRight = this.keys.right.isDown;
     this.frameInput.fireHeld = this.keys.fire.isDown;
     if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.frameInput.firePressed = true;
     if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.frameInput.fireReleased = true;
@@ -142,6 +175,8 @@ export class GameScene extends Phaser.Scene {
     const input: TickInput = {
       aimUp: fi.aimUp,
       aimDown: fi.aimDown,
+      aimLeft: fi.aimLeft,
+      aimRight: fi.aimRight,
       fireHeld: fi.fireHeld,
       firePressed: fi.firePressed,
       fireReleased: fi.fireReleased,
@@ -156,8 +191,10 @@ export class GameScene extends Phaser.Scene {
     for (const ev of events) {
       if (ev.type === 'detonation') {
         this.terrain.redraw();
-        const flash = this.add.circle(ev.x, ev.y, ev.radius, 0xffaa33, 0.8);
-        this.tweens.add({ targets: flash, alpha: 0, scale: 1.4, duration: 250, onComplete: () => flash.destroy() });
+        const boom = this.add.sprite(ev.x, ev.y, 'explosion');
+        boom.setScale((ev.radius * 2.5) / EXPLOSION_FRAME_W);
+        boom.play('explode');
+        boom.once('animationcomplete', () => boom.destroy());
       }
     }
   }
@@ -172,11 +209,13 @@ export class GameScene extends Phaser.Scene {
       const ry = lerp(ape.prevY, ape.y, alpha);
       const liveApe = ape.health > 0 && ape.y <= w.height;
 
-      const rect = this.apeRects[i];
-      rect.x = rx;
-      rect.y = ry;
-      rect.fillColor = ape.team === 0 ? 0x33ddaa : 0xdd5577;
-      rect.setAlpha(liveApe ? 1 : 0.2);
+      const sprite = this.apeSprites[i];
+      sprite.x = rx;
+      sprite.y = ry + APE_HEIGHT / 2; // bottom-anchored at the feet
+      // Art faces left; flip to face right. Active ape follows its aim; others face the enemy.
+      const facingRight = i === w.activeApe ? w.aim.facing > 0 : ape.team === 0;
+      sprite.flipX = facingRight;
+      sprite.setAlpha(liveApe ? 1 : 0.2);
 
       const bar = this.healthBars[i];
       bar.setVisible(liveApe);
@@ -198,14 +237,20 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (w.shot) {
-      if (!this.shotDot) this.shotDot = this.add.circle(0, 0, 5, 0xffffff);
-      this.shotDot.setPosition(
+      if (!this.shotSprite) {
+        this.shotSprite = this.add.image(0, 0, 'moonShot');
+        this.shotSprite.setScale(36 / this.shotSprite.width); // ~36px long
+      }
+      this.shotSprite.setPosition(
         lerp(w.shot.prevPos.x, w.shot.state.pos.x, alpha),
         lerp(w.shot.prevPos.y, w.shot.state.pos.y, alpha),
       );
-    } else if (this.shotDot) {
-      this.shotDot.destroy();
-      this.shotDot = null;
+      // Point the nose along the velocity (screen y is down, so atan2(vy, vx)).
+      const { x: vx, y: vy } = w.shot.state.vel;
+      this.shotSprite.setRotation(Math.atan2(vy, vx));
+    } else if (this.shotSprite) {
+      this.shotSprite.destroy();
+      this.shotSprite = null;
     }
 
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
@@ -214,8 +259,10 @@ export class GameScene extends Phaser.Scene {
 
     const teamName = active.team === 0 ? 'GREEN' : 'PINK';
     const secs = Math.ceil(w.turnTimer / FIXED_HZ);
+    const face = w.aim.facing > 0 ? '▶' : '◀';
+    const elev = (w.aim.elevation * 180 / Math.PI).toFixed(0);
     this.hud.setText(
-      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Angle ${(w.aim.angle * 180 / Math.PI).toFixed(0)}°   [↑/↓ aim · hold SPACE · T save]`,
+      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   [←/→ face · ↑/↓ aim · hold SPACE · T save]`,
     );
 
     if (w.phase === 'GAMEOVER') {
@@ -226,7 +273,8 @@ export class GameScene extends Phaser.Scene {
 
   private drawAim(): void {
     const m = muzzle(this.world);
+    const angle = aimAngle(this.world.aim);
     const len = 60;
-    this.aimLine.setTo(m.x, m.y, m.x + Math.cos(this.world.aim.angle) * len, m.y - Math.sin(this.world.aim.angle) * len);
+    this.aimLine.setTo(m.x, m.y, m.x + Math.cos(angle) * len, m.y - Math.sin(angle) * len);
   }
 }

@@ -11,7 +11,9 @@ import { TerrainMask, generateTerrainMask } from '../terrain/TerrainGenerator';
 import { isSolid, carveCircle, columnSurface } from '../physics/DestructibleTerrain';
 import { stepProjectile, ProjectileState, Vec2 } from '../physics/ProjectilePhysics';
 import { WEAPONS } from '../weapons/weaponData';
-import { AimState, createAim, adjustAngle, startCharge, updateCharge, release } from '../core/aim';
+import {
+  AimState, createAim, aimAngle, adjustElevation, setFacing, startCharge, updateCharge, release,
+} from '../core/aim';
 import { nextRandom } from '../core/rng';
 import { FIXED_DT } from '../core/time';
 
@@ -75,6 +77,8 @@ export interface WorldState {
 export interface TickInput {
   aimUp: boolean;
   aimDown: boolean;
+  aimLeft?: boolean;  // face left this tick
+  aimRight?: boolean; // face right this tick
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
@@ -94,14 +98,22 @@ export function teamApeIndices(world: WorldState, team: number): number[] {
 
 export function createWorld(seed: number, width: number, height: number): WorldState {
   const mask = generateTerrainMask(width, height, seed);
-  const total = APES_PER_TEAM * 2;
+  // Teams spawn on OPPOSING sides: team 0 clustered on the left, team 1 mirrored
+  // on the right. Index order is contiguous per team (team 0 first), so
+  // activeApe 0 is team 0's lead and teamApeIndices stays in placement order.
+  const SPAWN_MARGIN = 0.10; // nearest ape to the edge
+  const SPAWN_SPAN = 0.28;   // how far the team spreads inward from the margin
   const apes: ApeState[] = [];
-  for (let i = 0; i < total; i++) {
-    const frac = (i + 1) / (total + 1); // evenly spaced across the field
-    const x = Math.floor(width * frac);
-    const surfaceY = columnSurface(mask, x) ?? height - 50;
-    const y = surfaceY - APE_HEIGHT / 2;
-    apes.push({ team: i % 2, health: APE_MAX_HEALTH, x, y, prevX: x, prevY: y, velX: 0, velY: 0 });
+  for (let team = 0; team < 2; team++) {
+    for (let j = 0; j < APES_PER_TEAM; j++) {
+      const t = j / Math.max(1, APES_PER_TEAM - 1); // 0..1 across the team (guards 1-ape teams)
+      const fromEdge = SPAWN_MARGIN + SPAWN_SPAN * t; // 0.10 .. 0.38 from the team's edge
+      const frac = team === 0 ? fromEdge : 1 - fromEdge;
+      const x = Math.floor(width * frac);
+      const surfaceY = columnSurface(mask, x) ?? height - 50;
+      const y = surfaceY - APE_HEIGHT / 2;
+      apes.push({ team, health: APE_MAX_HEALTH, x, y, prevX: x, prevY: y, velX: 0, velY: 0 });
+    }
   }
 
   const roll = nextRandom(seed >>> 0);
@@ -111,7 +123,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     tick: 0,
     rng: roll.next,
     wind: (roll.value * 2 - 1) * MAX_WIND,
-    aim: createAim(),
+    aim: createAim(1),        // team 0 starts on the left, facing right toward the enemy
     apes,
     activeApe: 0,             // team 0's first ape
     phase: 'AIMING',
@@ -128,10 +140,11 @@ export function createWorld(seed: number, width: number, height: number): WorldS
 /** Logical muzzle of the active ape. */
 export function muzzle(world: WorldState): Vec2 {
   const ape = world.apes[world.activeApe];
+  const angle = aimAngle(world.aim);
   const clearance = 22;
   return {
-    x: ape.x + Math.cos(world.aim.angle) * clearance,
-    y: ape.y - APE_HEIGHT / 2 - Math.sin(world.aim.angle) * clearance,
+    x: ape.x + Math.cos(angle) * clearance,
+    y: ape.y - APE_HEIGHT / 2 - Math.sin(angle) * clearance,
   };
 }
 
@@ -147,8 +160,10 @@ export function stepWorld(world: WorldState, input: TickInput): void {
 
   if (world.phase === 'AIMING') {
     const aim = world.aim;
-    if (input.aimUp) adjustAngle(aim, 1, FIXED_DT);
-    if (input.aimDown) adjustAngle(aim, -1, FIXED_DT);
+    if (input.aimUp) adjustElevation(aim, 1, FIXED_DT);
+    if (input.aimDown) adjustElevation(aim, -1, FIXED_DT);
+    if (input.aimLeft) setFacing(aim, -1);
+    if (input.aimRight) setFacing(aim, 1);
     if (!world.shot) {
       if (input.firePressed) startCharge(aim);
       if (input.fireHeld) updateCharge(aim, FIXED_DT);
@@ -230,7 +245,8 @@ function rerollTurn(world: WorldState): void {
   const roll = nextRandom(world.rng);
   world.rng = roll.next;
   world.wind = (roll.value * 2 - 1) * MAX_WIND;
-  world.aim = createAim();
+  // Default facing toward the enemy: team 0 (left) faces right, team 1 (right) faces left.
+  world.aim = createAim(world.apes[world.activeApe].team === 0 ? 1 : -1);
   world.turnTimer = TURN_TICKS;
   world.resolveTimer = 0;
 }
@@ -239,12 +255,13 @@ function fire(world: WorldState, power: number): void {
   if (power <= 0) return;
   const weapon = WEAPONS.moonShot;
   const speed = power * weapon.launchSpeed;
+  const angle = aimAngle(world.aim);
   const m = muzzle(world);
   world.shot = {
     prevPos: { x: m.x, y: m.y },
     state: {
       pos: { x: m.x, y: m.y },
-      vel: { x: Math.cos(world.aim.angle) * speed, y: -Math.sin(world.aim.angle) * speed },
+      vel: { x: Math.cos(angle) * speed, y: -Math.sin(angle) * speed },
     },
   };
 }
@@ -366,7 +383,8 @@ export function hashWorld(world: WorldState): number {
     mixF(ape.velX);
     mixF(ape.velY);
   }
-  mixF(world.aim.angle);
+  mix(world.aim.facing);
+  mixF(world.aim.elevation);
   mixF(world.aim.power);
   mix(world.aim.isCharging ? 1 : 0);
   mix(world.shot ? 1 : 0);
