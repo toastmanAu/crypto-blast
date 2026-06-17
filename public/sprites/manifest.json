@@ -97,6 +97,14 @@
       "weaponId": "honeypotMine"
     },
     {
+      "key": "bridge",
+      "kind": "image",
+      "file": "sprites/bridge.png",
+      "width": 532,
+      "height": 480,
+      "weaponId": "bridge"
+    },
+    {
       "key": "apeIdle",
       "kind": "image",
       "file": "sprites/apeIdle.png",
