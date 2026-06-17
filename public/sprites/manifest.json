@@ -155,6 +155,44 @@
       "facing": "right"
     },
     {
+      "key": "terrainDirt",
+      "kind": "terrainSet",
+      "files": [
+        "sprites/terrain/dirt_00.png",
+        "sprites/terrain/dirt_01.png",
+        "sprites/terrain/dirt_02.png",
+        "sprites/terrain/dirt_03.png",
+        "sprites/terrain/dirt_04.png",
+        "sprites/terrain/dirt_05.png",
+        "sprites/terrain/dirt_06.png",
+        "sprites/terrain/dirt_07.png",
+        "sprites/terrain/dirt_08.png",
+        "sprites/terrain/dirt_09.png",
+        "sprites/terrain/dirt_10.png",
+        "sprites/terrain/dirt_11.png",
+        "sprites/terrain/dirt_12.png"
+      ],
+      "count": 13,
+      "tileSize": [
+        512,
+        512
+      ]
+    },
+    {
+      "key": "terrainRock",
+      "kind": "terrainSet",
+      "files": [
+        "sprites/terrain/rock_00.png",
+        "sprites/terrain/rock_01.png",
+        "sprites/terrain/rock_02.png"
+      ],
+      "count": 3,
+      "tileSize": [
+        512,
+        512
+      ]
+    },
+    {
       "key": "apeWalk",
       "kind": "spritesheet",
       "file": "sprites/apeWalk.png",
