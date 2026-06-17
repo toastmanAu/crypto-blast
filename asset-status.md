@@ -47,7 +47,7 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 | ID | Prompt | File | Status |
 |----|--------|------|--------|
 | A1 | Base body (neutral) ★ | `default_ape.png` | ✅ (faces left) |
-| A2 | Aiming arm (layer) | — | ❌ |
+| A2 | Aiming arm (layer) | `aim_arm.png` (hand-cut, GIMP) | ✅ (pivot origin [0.57,0.06], top-centre shoulder) |
 | A3 | Idle frame | — | ❌ |
 | A4 | Walk cycle (×4) | `walk_0.png`–`walk_3.png` | ✅ (faces right; walk_3 has magenta speck) |
 | A5 | Jump / launched | `jump_0.png`–`jump_3.png` | ✅ (4-frame arc, faces right) |
@@ -99,6 +99,6 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 
 ## Summary
 - **Weapons:** 9/10 + both companions — only **B8 Bridge** missing. Enough art to skin the whole P3 starter arsenal.
-- **Ape:** 4/7 entries (base + hurt + walk×4 + jump×4). Still need aim-arm (A2), idle (A3), victory (A7).
+- **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
 - **Effects:** explosion ✅ (normalize first); muzzle flash / splash / smoke ❌.
 - **Terrain (C):** 0/4. **UI/HUD (D):** 0/7.

@@ -113,6 +113,18 @@
       "facing": "left"
     },
     {
+      "key": "apeAimArm",
+      "kind": "image",
+      "file": "sprites/apeAimArm.png",
+      "width": 247,
+      "height": 563,
+      "origin": [
+        0.57,
+        0.06
+      ],
+      "facing": "right"
+    },
+    {
       "key": "apeWalk",
       "kind": "spritesheet",
       "file": "sprites/apeWalk.png",
