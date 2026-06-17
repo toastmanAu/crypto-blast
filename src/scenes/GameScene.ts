@@ -14,6 +14,8 @@ import { downloadJson } from '../util/download';
 const EXPLOSION_FRAME_W = 969;
 const EXPLOSION_FRAME_H = 878;
 const APE_TINT_TEAM1 = 0xff8fb0; // the one ape sprite is green; tint team 1 pink
+const TEAM0_COLOUR = 0x33ddaa;   // green team marker pad
+const TEAM1_COLOUR = 0xdd5577;   // pink team marker pad
 
 const POWER_BAR_WIDTH = 200;
 // Fixed for now; later the match seed comes from the lobby / chain.
@@ -49,6 +51,7 @@ export class GameScene extends Phaser.Scene {
   };
 
   // Render-only objects.
+  private teamMarkers: Phaser.GameObjects.Ellipse[] = [];
   private apeSprites: Phaser.GameObjects.Image[] = [];
   private healthBars: Phaser.GameObjects.Rectangle[] = [];
   private activeMarker!: Phaser.GameObjects.Triangle;
@@ -91,6 +94,15 @@ export class GameScene extends Phaser.Scene {
       frames: this.anims.generateFrameNumbers('explosion', { start: 0, end: 4 }),
       frameRate: 18,
     });
+
+    // Team-coloured pad under each ape's feet (added BEFORE the sprites so it
+    // draws underneath). This is what distinguishes the teams at a glance.
+    for (const ape of this.world.apes) {
+      const colour = ape.team === 0 ? TEAM0_COLOUR : TEAM1_COLOUR;
+      this.teamMarkers.push(
+        this.add.ellipse(ape.x, ape.y + APE_HEIGHT / 2, APE_WIDTH * 1.7, APE_WIDTH * 0.65, colour, 0.6),
+      );
+    }
 
     // One green ape sprite, scaled to the collision height and bottom-anchored at
     // the feet; team 1 is tinted pink. Facing is set each frame in render().
@@ -208,6 +220,11 @@ export class GameScene extends Phaser.Scene {
       const rx = lerp(ape.prevX, ape.x, alpha);
       const ry = lerp(ape.prevY, ape.y, alpha);
       const liveApe = ape.health > 0 && ape.y <= w.height;
+
+      const marker = this.teamMarkers[i];
+      marker.x = rx;
+      marker.y = ry + APE_HEIGHT / 2 - 2; // sits at the feet
+      marker.setAlpha(liveApe ? 0.6 : 0.15);
 
       const sprite = this.apeSprites[i];
       sprite.x = rx;
