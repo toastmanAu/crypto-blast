@@ -41,6 +41,7 @@ STATIC = [
     ("chart_punch",          "pumpPunch",      "pumpPunch",      None),
     ("whale_bomb",           "whaleDump",      "whaleDump",      "left"),
     ("honey_pot",            "honeypotMine",   "honeypotMine",   None),
+    ("Bridge",               "bridge",         "bridge",         None),
     ("default_ape",          "apeIdle",        None,             "left"),
     ("worried_ape",          "apeHurt",        None,             "left"),
 ]

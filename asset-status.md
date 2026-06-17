@@ -66,7 +66,7 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 | B5 | Diamond Hands 💎 | `diamond_hand_grenade.png` | ✅ |
 | B6 | Llama Bomb 🦙 | `llama_bomb.png` | ✅ |
 | B7 | Pump Punch 📈 | `chart_punch.png` | ✅ |
-| B8 | Bridge 🌉 (teleport) | — | ❌ |
+| B8 | Bridge 🌉 (teleport) | `Bridge.png` | ✅ |
 | B9 | Whale Dump 🐋 (signature) | `whale_bomb.png` | ✅ |
 | B10 | Honeypot Mine 🍯 | `honey_pot.png` | ✅ |
 
@@ -98,7 +98,7 @@ lookup. `canonicalFacing: right`; `apeIdle`/`apeHurt` carry `facing: left` → `
 | D7 | Title art / logo lockup | ❌ |
 
 ## Summary
-- **Weapons:** 9/10 + both companions — only **B8 Bridge** missing. Enough art to skin the whole P3 starter arsenal.
+- **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
 - **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
 - **Effects:** explosion ✅ (normalize first); muzzle flash / splash / smoke ❌.
 - **Terrain (C):** 0/4. **UI/HUD (D):** 0/7.
