@@ -93,18 +93,36 @@ seed → same ground → identical replays). Re-tiles on every carve.
 | C4 | Glow crystal accent | ✅ ×7 (`decorCrystal` set, trim-only, no key — pink crystals) |
 
 ## Batch D — UI / HUD / backgrounds
-| ID | Prompt | Status |
-|----|--------|--------|
-| D1 | Weapon-wheel icons (×8) | ❌ |
-| D2 | Health / name bar frame | ❌ |
-| D3 | Wind gauge | ❌ |
-| D4 | Power meter | ❌ |
-| D5 | Parallax sky (far) | ❌ |
-| D6 | Parallax mid (islands) | ❌ |
-| D7 | Title art / logo lockup | ❌ |
+Prompts ready & filename-stamped in `flux-prompts.md` (each carries an **Export as:** line). The
+`prep-assets.py` "wired?" column is what makes a dropped master actually land — see flux-prompts'
+"Next wave" table for the row/category each needs.
+| ID | Prompt | Export filename | Art | Wired in prep-assets.py? |
+|----|--------|-----------------|-----|--------------------------|
+| D1 | Weapon-wheel icons (×8) | `icon_<weaponId>.png` | ❌ | ❌ needs ICONS category |
+| D2 | Health / name bar frame | `ui_healthbar.png` | ❌ | ❌ needs UI category |
+| D3 | Wind gauge | `ui_wind.png` | ❌ | ❌ (UI category) |
+| D4 | Power meter | `ui_power.png` | ❌ | ❌ (UI category) |
+| D5 | Parallax sky (far) | `bg_sky.png` | ❌ | ✅ BACKGROUNDS |
+| D6 | Parallax mid (islands) | `bg_mid.png` | ❌ | ✅ BACKGROUNDS |
+| D7 | Title art / logo lockup | `ui_title.png` | ❌ | ❌ (UI category) |
 
 ## Summary
 - **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
-- **Ape:** 5/7 entries (base + hurt + walk×4 + jump×4 + aim-arm). Still need idle (A3), victory (A7). Aim-arm is hand-cut (Flux couldn't manage it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
+- **Ape:** 5/7 art entries. base + hurt + walk×4 + jump×4 + aim-arm done. Still need **idle (A3)** and
+  **victory (A7)**. ⚠️ Note: `apeIdle` is currently **aliased to the base body** (`prep-assets.py`
+  maps `default_ape → apeIdle`), so an idle frame *renders* but isn't a real A3 breathing pose;
+  generating `idle_ape.png` and re-pointing that row replaces the placeholder. There is **no
+  `apeVictory` key at all** — A7 needs a new STATIC row. Aim-arm is hand-cut (Flux couldn't manage
+  it); rotates about a recorded top-centre shoulder pivot, not the default centre origin.
 - **Effects:** all 4 ✅ — explosion, muzzle flash, water splash, smoke puff. **Complete.**
-- **Terrain (C):** 4/4 ✅ — dirt ×13 + rock ×3 (opaque, H+V seamless) + grass cap ×3 (RGBA, H-tile only) + crystal accent ×7 (decor, scatter). Grouped sets, randomised per match seed. **Complete.** **UI/HUD (D):** 0/7.
+- **Terrain (C):** 4/4 ✅ — dirt ×13 + rock ×3 (opaque, H+V seamless) + grass cap ×3 (RGBA, H-tile only) + crystal accent ×7 (decor, scatter). Grouped sets, randomised per match seed. **Complete.**
+- **UI/HUD (D):** 0/7 art. Prompts ready & filename-stamped; D5/D6 are plug-and-play, the other 5
+  also need `prep-assets.py` wiring rows before a wave lands.
+
+### Gap list for the next Flux wave (prompts ready → run, then `prep-assets.py`)
+1. A3 idle → `idle_ape.png` · 2. A7 victory → `victory_ape.png`
+3. D1 icons ×8 → `icon_<weaponId>.png` · 4. D2 `ui_healthbar.png` · 5. D3 `ui_wind.png`
+6. D4 `ui_power.png` · 7. D5 `bg_sky.png` (wired) · 8. D6 `bg_mid.png` (wired) · 9. D7 `ui_title.png`
+
+**Before the wave wires in:** add the `prep-assets.py` rows/categories for A7, D1–D4, D7 (see
+flux-prompts "Next wave" table). D5/D6 and the A3 re-point are the only zero/near-zero-code drops.

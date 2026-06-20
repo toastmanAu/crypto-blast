@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prep raw asset exports into engine-ready sprites for Phaser.
 
-Reads raw masters from assets/ (the GPT/Flux exports + rembg/bg-removal output)
-and writes normalized, engine-ready PNGs + a manifest to public/sprites/.
+Reads raw masters from assets/raw/ (the GPT/Flux exports + rembg/bg-removal
+output — gitignored working files) and writes normalized, engine-ready PNGs +
+a manifest to public/sprites/ (the committed artifacts).
 
 Pipeline per asset:
   - residual magenta key cleanup (tight around #FF00FF) -> transparent
@@ -24,7 +25,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "assets"
+SRC = ROOT / "assets" / "raw"
 OUT = ROOT / "public" / "sprites"
 ALPHA_THRESHOLD = 8  # px with alpha <= this are treated as empty
 

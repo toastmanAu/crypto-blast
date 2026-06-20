@@ -53,6 +53,7 @@ Each entry has five fields:
 - **Negative:** global negative + `front-facing, weapon, big action`
 - **Reference:** A1 output.
 - **Dims:** 1024×1024. **Seed:** lock.
+- **Export as:** `idle_ape.png` — replaces the current `default_ape→apeIdle` alias (re-point `prep-assets.py` STATIC row 49 from `default_ape` to `idle_ape`).
 
 ### A4 — Walk cycle (4 frames)
 - **Positive:** `Side-view walk-cycle frame {1 of 4 | 2 of 4 | 3 of 4 | 4 of 4} of the reference ape, mid-stride legs in {contact | down | passing | up} position, arms swinging naturally, facing right, consistent proportions, flat vector cartoon, bold outlines, cel shading, isolated on solid flat #FF00FF magenta background`
@@ -74,6 +75,7 @@ Each entry has five fields:
 - **Positive:** `Side-view of the reference ape in a victorious celebration pose, one fist raised, big grin, confident, facing right, flat vector cartoon, bold outlines, cel shading, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `front-facing, sad, neutral`
 - **Reference:** A1 output. **Dims:** 1024×1024. **Seed:** lock.
+- **Export as:** `victory_ape.png` — **needs a new `prep-assets.py` STATIC row** `("victory_ape", "apeVictory", None, "right")` (no `apeVictory` key exists yet).
 
 ---
 
@@ -175,37 +177,44 @@ Generate these **seamless**. They get stamped into the procedural island and the
 - **Negative:** global negative + `detailed scene, drop shadow, realistic, multiple icons`
 - **Dims:** 512×512. **Seed:** free.
 - **Note:** run once per starter-8 weapon, swapping the bracketed subject; keep the same outline weight for a consistent set.
+- **Export as:** `icon_<weaponId>.png` — one per weapon, matching the manifest `weaponId`: `icon_moonShot`, `icon_gasGrenade`, `icon_airdropCluster`, `icon_watermelonBomb`, `icon_diamondHands`, `icon_llamaBomb`, `icon_pumpPunch`, `icon_bridge` (`.png`). **Needs a new `prep-assets.py` ICONS category** (512² magenta-key + trim) producing keys `iconMoonShot`…; none exist yet.
 
 ### D2 — Health / name bar frame
 - **Positive:** `A flat game UI nameplate-and-healthbar frame, rounded rectangle with a crypto-neon trim (teal and gold), empty bar area in the centre for a fill, small ape-avatar circle slot on the left, clean vector UI, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `text filled in, realistic, 3d bevel photo`
 - **Dims:** 1024×256.
+- **Export as:** `ui_healthbar.png` → key `uiHealthBar`. **Needs a new `prep-assets.py` UI category** (magenta-key, **no trim** — keep frame geometry for fill anchoring).
 
 ### D3 — Wind gauge
 - **Positive:** `A flat circular wind-indicator gauge for a game HUD, semicircular dial with left and right arrows and a centre needle, blue-to-red intensity ticks, small flag motif, clean vector UI, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `compass, realistic, weather photo`
 - **Dims:** 512×512.
+- **Export as:** `ui_wind.png` → key `uiWindGauge` (UI category; no trim — needle rotates about canvas centre).
 
 ### D4 — Power meter
 - **Positive:** `A flat vertical power-charge meter for a game HUD, tall rounded bar segmented from green at the bottom through yellow to red at the top, glossy clean vector UI, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `horizontal, realistic, thermometer photo`
 - **Dims:** 256×1024.
+- **Export as:** `ui_power.png` → key `uiPowerMeter` (UI category; no trim — fill clips bottom→top).
 
 ### D5 — Parallax sky background (far layer)
 - **Positive:** `A wide cartoon game background sky, dreamy gradient from teal to soft purple, a few stylised flat clouds, a faint large crypto moon with a subtle coin emblem low on the horizon, flat vector cartoon, soft, no characters, no ground`
 - **Negative:** `photorealistic, characters, foreground terrain, text, watermark, busy detail`
 - **Dims:** 2048×768.
+- **Export as:** `bg_sky.png` → key `bgSky`. ✅ **Already wired** (`prep-assets.py` BACKGROUNDS — no key, no trim; renders complete, *not* on magenta). Just drop the file in.
 
 ### D6 — Parallax mid background (islands/silhouette layer)
 - **Positive:** `A wide cartoon mid-distance parallax layer of floating crypto islands and distant rock spires in soft silhouette, muted teal-purple tones, flat vector cartoon, semi-transparent atmospheric haze, no characters, designed to sit behind gameplay terrain`
 - **Negative:** `photorealistic, foreground detail, characters, bright saturated, text`
 - **Dims:** 2048×768.
+- **Export as:** `bg_mid.png` → key `bgMid`. ✅ **Already wired** (BACKGROUNDS). Drop the file in.
 
 ### D7 — Title art / logo lockup
 - **Positive:** `Bold game logo lockup reading "CRYPTO BLAST" in chunky 3d-cartoon comic letters, gold and teal with a small cracked-coin explosion behind the text, a NervApe-style cartoon ape peeking over the letters holding a tiny rocket, flat-shaded cartoon, thick black outlines, isolated on solid flat #FF00FF magenta background`
 - **Negative:** `photorealistic, misspelled text, gibberish letters, cluttered, watermark`
 - **Dims:** 1536×864.
 - **Note:** Flux 2 renders text well, but verify the spelling "CRYPTO BLAST" in the output; regenerate if letters distort.
+- **Export as:** `ui_title.png` → key `uiTitle` (UI category; magenta-key + trim — it's authored on #FF00FF).
 
 ---
 
@@ -216,3 +225,27 @@ Generate these **seamless**. They get stamped into the procedural island and the
 4. **D1** weapon icons, then D2–D4 HUD, then D5–D7 backgrounds/title.
 
 Everything routes through Wyltek's bg-removal, then gets packed into Phaser texture atlases during P3/P5.
+
+---
+
+## ⏭ Next wave — remaining gaps (as of 2026-06-21)
+
+Batches A (most), B, C, effects are **complete and wired**. Only these remain. Each gap prompt
+above now carries an **Export as:** line with the exact filename `prep-assets.py` expects.
+
+| Item | Export filename | Pipeline status |
+|------|-----------------|-----------------|
+| A3 idle | `idle_ape.png` | re-point STATIC row 49 `default_ape`→`idle_ape` (currently base body is aliased as idle) |
+| A7 victory | `victory_ape.png` | **add STATIC row** `("victory_ape","apeVictory",None,"right")` |
+| D1 icons ×8 | `icon_<weaponId>.png` | **add ICONS category** (512² key+trim) |
+| D2 health bar | `ui_healthbar.png` | **add UI category** (key, no trim) |
+| D3 wind gauge | `ui_wind.png` | UI category (no trim) |
+| D4 power meter | `ui_power.png` | UI category (no trim) |
+| D5 sky | `bg_sky.png` | ✅ already wired (BACKGROUNDS) |
+| D6 mid | `bg_mid.png` | ✅ already wired (BACKGROUNDS) |
+| D7 title | `ui_title.png` | UI category (key + trim) |
+
+**Heads-up:** `prep-assets.py` is stem-keyed — a master is ignored unless both its filename matches
+the **Export as** stem *and* a mapping row/category exists. D5/D6 are plug-and-play; the rest need
+the noted `prep-assets.py` rows added **before** the wave will wire in (a small, separate code task —
+not part of this prompt-prep pass).
