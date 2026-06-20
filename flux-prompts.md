@@ -53,7 +53,7 @@ Each entry has five fields:
 - **Negative:** global negative + `front-facing, weapon, big action`
 - **Reference:** A1 output.
 - **Dims:** 1024×1024. **Seed:** lock.
-- **Export as:** `idle_ape.png` — replaces the current `default_ape→apeIdle` alias (re-point `prep-assets.py` STATIC row 49 from `default_ape` to `idle_ape`).
+- **Export as:** `idle_ape.png` — replaces the current `default_ape→apeIdle` alias: re-point the `prep-assets.py` `apeIdle` STATIC row from `default_ape` to `idle_ape` **and flip facing `left`→`right`** (this prompt is authored facing right, unlike the left-facing base body).
 
 ### A4 — Walk cycle (4 frames)
 - **Positive:** `Side-view walk-cycle frame {1 of 4 | 2 of 4 | 3 of 4 | 4 of 4} of the reference ape, mid-stride legs in {contact | down | passing | up} position, arms swinging naturally, facing right, consistent proportions, flat vector cartoon, bold outlines, cel shading, isolated on solid flat #FF00FF magenta background`
@@ -75,7 +75,7 @@ Each entry has five fields:
 - **Positive:** `Side-view of the reference ape in a victorious celebration pose, one fist raised, big grin, confident, facing right, flat vector cartoon, bold outlines, cel shading, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `front-facing, sad, neutral`
 - **Reference:** A1 output. **Dims:** 1024×1024. **Seed:** lock.
-- **Export as:** `victory_ape.png` — **needs a new `prep-assets.py` STATIC row** `("victory_ape", "apeVictory", None, "right")` (no `apeVictory` key exists yet).
+- **Export as:** `victory_ape.png` → key `apeVictory`. ✅ Wired (STATIC row, facing right); skips until the master lands.
 
 ---
 
@@ -177,13 +177,13 @@ Generate these **seamless**. They get stamped into the procedural island and the
 - **Negative:** global negative + `detailed scene, drop shadow, realistic, multiple icons`
 - **Dims:** 512×512. **Seed:** free.
 - **Note:** run once per starter-8 weapon, swapping the bracketed subject; keep the same outline weight for a consistent set.
-- **Export as:** `icon_<weaponId>.png` — one per weapon, matching the manifest `weaponId`: `icon_moonShot`, `icon_gasGrenade`, `icon_airdropCluster`, `icon_watermelonBomb`, `icon_diamondHands`, `icon_llamaBomb`, `icon_pumpPunch`, `icon_bridge` (`.png`). **Needs a new `prep-assets.py` ICONS category** (512² magenta-key + trim) producing keys `iconMoonShot`…; none exist yet.
+- **Export as:** `icon_<weaponId>.png` — one per weapon, matching the manifest `weaponId`: `icon_moonShot`, `icon_gasGrenade`, `icon_airdropCluster`, `icon_watermelonBomb`, `icon_diamondHands`, `icon_llamaBomb`, `icon_pumpPunch`, `icon_bridge` (`.png`). ✅ Wired (ICONS category, 512² magenta-key + trim) → keys `iconMoonShot`… in `sprites/icons/`, each carrying its `weaponId`. Rows exist for all 10 weapons; extras beyond the starter-8 stay pending.
 
 ### D2 — Health / name bar frame
 - **Positive:** `A flat game UI nameplate-and-healthbar frame, rounded rectangle with a crypto-neon trim (teal and gold), empty bar area in the centre for a fill, small ape-avatar circle slot on the left, clean vector UI, isolated on solid flat #FF00FF magenta background`
 - **Negative:** global negative + `text filled in, realistic, 3d bevel photo`
 - **Dims:** 1024×256.
-- **Export as:** `ui_healthbar.png` → key `uiHealthBar`. **Needs a new `prep-assets.py` UI category** (magenta-key, **no trim** — keep frame geometry for fill anchoring).
+- **Export as:** `ui_healthbar.png` → key `uiHealthBar`. ✅ Wired (UI category, magenta-key, **no trim** — frame geometry preserved for fill anchoring).
 
 ### D3 — Wind gauge
 - **Positive:** `A flat circular wind-indicator gauge for a game HUD, semicircular dial with left and right arrows and a centre needle, blue-to-red intensity ticks, small flag motif, clean vector UI, isolated on solid flat #FF00FF magenta background`
@@ -235,17 +235,17 @@ above now carries an **Export as:** line with the exact filename `prep-assets.py
 
 | Item | Export filename | Pipeline status |
 |------|-----------------|-----------------|
-| A3 idle | `idle_ape.png` | re-point STATIC row 49 `default_ape`→`idle_ape` (currently base body is aliased as idle) |
-| A7 victory | `victory_ape.png` | **add STATIC row** `("victory_ape","apeVictory",None,"right")` |
-| D1 icons ×8 | `icon_<weaponId>.png` | **add ICONS category** (512² key+trim) |
-| D2 health bar | `ui_healthbar.png` | **add UI category** (key, no trim) |
-| D3 wind gauge | `ui_wind.png` | UI category (no trim) |
-| D4 power meter | `ui_power.png` | UI category (no trim) |
-| D5 sky | `bg_sky.png` | ✅ already wired (BACKGROUNDS) |
-| D6 mid | `bg_mid.png` | ✅ already wired (BACKGROUNDS) |
-| D7 title | `ui_title.png` | UI category (key + trim) |
+| A3 idle | `idle_ape.png` | ⚠️ **manual:** re-point the `apeIdle` STATIC row `default_ape`→`idle_ape` **+ flip facing `left`→`right`** (base body is aliased as idle until then) |
+| A7 victory | `victory_ape.png` | ✅ wired (STATIC `apeVictory`) |
+| D1 icons ×8 | `icon_<weaponId>.png` | ✅ wired (ICONS category, 512² key+trim) |
+| D2 health bar | `ui_healthbar.png` | ✅ wired (UI, no-trim) |
+| D3 wind gauge | `ui_wind.png` | ✅ wired (UI, no-trim) |
+| D4 power meter | `ui_power.png` | ✅ wired (UI, no-trim) |
+| D5 sky | `bg_sky.png` | ✅ wired (BACKGROUNDS) |
+| D6 mid | `bg_mid.png` | ✅ wired (BACKGROUNDS) |
+| D7 title | `ui_title.png` | ✅ wired (UI, trim) |
 
-**Heads-up:** `prep-assets.py` is stem-keyed — a master is ignored unless both its filename matches
-the **Export as** stem *and* a mapping row/category exists. D5/D6 are plug-and-play; the rest need
-the noted `prep-assets.py` rows added **before** the wave will wire in (a small, separate code task —
-not part of this prompt-prep pass).
+**Heads-up:** `prep-assets.py` is stem-keyed — a master is ignored unless its filename matches the
+**Export as** stem *and* a mapping row/category exists. As of 2026-06-21 **every gap except A3 is
+fully wired**: drop the named master into `assets/raw/`, run `prep-assets.py`, and it lands. A3 idle
+needs the one manual row edit above (the source *and* facing change together).
