@@ -10,7 +10,7 @@
 import { TerrainMask, generateTerrainMask } from '../terrain/TerrainGenerator';
 import { isSolid, carveCircle, columnSurface } from '../physics/DestructibleTerrain';
 import { stepProjectile, ProjectileState, Vec2 } from '../physics/ProjectilePhysics';
-import { WEAPONS } from '../weapons/weaponData';
+import { WEAPONS, WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
 import {
   AimState, createAim, aimAngle, adjustElevation, setFacing, startCharge, updateCharge, release,
 } from '../core/aim';
@@ -51,6 +51,7 @@ export interface ApeState {
 export interface ShotState {
   state: ProjectileState;
   prevPos: Vec2;
+  weapon: number; // WEAPON_ORDER index this shot was fired with
 }
 
 export type SimEvent = { type: 'detonation'; x: number; y: number; radius: number };
@@ -69,6 +70,8 @@ export interface WorldState {
   resolveTimer: number;  // ticks elapsed in RESOLVING (spiral guard)
   teamNext: [number, number]; // next roster position to act, per team
   winner: number | null; // team index, -1 draw, null ongoing
+  selectedWeapon: number; // sticky WEAPON_ORDER index, default 0
+  ammo: number[][];       // ammo[team][weaponIndex]; -1 = unlimited
   shot: ShotState | null;
   mask: TerrainMask;
   events: SimEvent[];
@@ -82,6 +85,7 @@ export interface TickInput {
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
+  selectWeapon?: number; // set only on the tick a selection is confirmed
 }
 
 /** True if an ape is still in play. */
@@ -117,6 +121,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
   }
 
   const roll = nextRandom(seed >>> 0);
+  const startAmmo = WEAPON_ORDER.map((id) => WEAPONS[id].ammoStart);
   return {
     width,
     height,
@@ -131,6 +136,8 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     resolveTimer: 0,
     teamNext: [1, 0],        // team 0 already acting at pos 0; next is pos 1
     winner: null,
+    selectedWeapon: 0,
+    ammo: [startAmmo.slice(), startAmmo.slice()],
     shot: null,
     mask,
     events: [],
@@ -159,6 +166,13 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   }
 
   if (world.phase === 'AIMING') {
+    if (input.selectWeapon !== undefined) {
+      const i = input.selectWeapon;
+      const team = world.apes[world.activeApe].team;
+      if (i >= 0 && i < WEAPON_ORDER.length && world.ammo[team][i] !== 0) {
+        world.selectedWeapon = i;
+      }
+    }
     const aim = world.aim;
     if (input.aimUp) adjustElevation(aim, 1, FIXED_DT);
     if (input.aimDown) adjustElevation(aim, -1, FIXED_DT);
@@ -253,7 +267,10 @@ function rerollTurn(world: WorldState): void {
 
 function fire(world: WorldState, power: number): void {
   if (power <= 0) return;
-  const weapon = WEAPONS.moonShot;
+  const i = world.selectedWeapon;
+  const team = world.apes[world.activeApe].team;
+  if (world.ammo[team][i] === 0) return; // empty: cannot fire
+  const weapon = weaponAt(i);
   const speed = power * weapon.launchSpeed;
   const angle = aimAngle(world.aim);
   const m = muzzle(world);
@@ -263,7 +280,14 @@ function fire(world: WorldState, power: number): void {
       pos: { x: m.x, y: m.y },
       vel: { x: Math.cos(angle) * speed, y: -Math.sin(angle) * speed },
     },
+    weapon: i,
   };
+  if (world.ammo[team][i] > 0) {
+    world.ammo[team][i]--;
+    // When the last round of a finite weapon is spent, revert the sticky selection
+    // to moonShot (index 0) so the next turn's fire trigger is never dead.
+    if (world.ammo[team][i] === 0) world.selectedWeapon = 0;
+  }
 }
 
 function settleApes(world: WorldState): void {
@@ -305,7 +329,7 @@ function settleApes(world: WorldState): void {
 function advanceShot(world: WorldState): void {
   if (!world.shot) return;
   world.shot.prevPos = { x: world.shot.state.pos.x, y: world.shot.state.pos.y };
-  const weapon = WEAPONS.moonShot;
+  const weapon = weaponAt(world.shot.weapon);
   const sub = FIXED_DT / SHOT_SUBSTEPS;
   for (let i = 0; i < SHOT_SUBSTEPS; i++) {
     world.shot.state = stepProjectile(world.shot.state, weapon.projectile, world.wind, sub);
@@ -322,7 +346,7 @@ function advanceShot(world: WorldState): void {
 function detonate(world: WorldState, x: number, y: number, radius: number): void {
   carveCircle(world.mask, x, y, radius);
   world.events.push({ type: 'detonation', x, y, radius });
-  const weapon = WEAPONS.moonShot;
+  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
 }
 
@@ -357,7 +381,7 @@ export function detonateAt(world: WorldState, x: number, y: number, radius: numb
   applyBlast(world, x, y, radius, damage);
 }
 
-/** Deterministic FNV-1a fingerprint over the full world. Field order is FINAL. */
+/** Deterministic FNV-1a fingerprint over the full world. Field order must stay stable across versions to keep replays verifiable. */
 export function hashWorld(world: WorldState): number {
   let h = 2166136261 >>> 0;
   const mix = (n: number): void => {
@@ -387,12 +411,17 @@ export function hashWorld(world: WorldState): number {
   mixF(world.aim.elevation);
   mixF(world.aim.power);
   mix(world.aim.isCharging ? 1 : 0);
+  mix(world.selectedWeapon);
+  for (let t = 0; t < world.ammo.length; t++) {
+    for (let i = 0; i < world.ammo[t].length; i++) mix(world.ammo[t][i]);
+  }
   mix(world.shot ? 1 : 0);
   if (world.shot) {
     mixF(world.shot.state.pos.x);
     mixF(world.shot.state.pos.y);
     mixF(world.shot.state.vel.x);
     mixF(world.shot.state.vel.y);
+    mix(world.shot.weapon);
   }
   const { data } = world.mask;
   for (let i = 0; i < data.length; i++) mix(data[i]);

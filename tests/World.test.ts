@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
 } from '../src/sim/World';
+import { WEAPON_ORDER } from '../src/weapons/weaponData';
 
 const W = 1280;
 const H = 720;
@@ -160,5 +161,108 @@ describe('2D ape physics', () => {
     const before = a.health;
     for (let i = 0; i < 5; i++) stepWorld(w, idle);
     expect(a.health).toBeLessThan(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 Arsenal Tasks
+// ---------------------------------------------------------------------------
+
+describe('P3 selection + ammo state', () => {
+  it('createWorld starts on moonShot with a 2 x N ammo matrix from ammoStart', () => {
+    const w = createWorld(1, 1280, 720);
+    expect(w.selectedWeapon).toBe(0);
+    expect(w.ammo.length).toBe(2);
+    expect(w.ammo[0].length).toBe(WEAPON_ORDER.length);
+    expect(w.ammo[0][0]).toBe(-1);           // moonShot unlimited
+    expect(w.ammo[0][3]).toBe(3);            // watermelon starts at 3
+    expect(w.ammo[1]).toEqual(w.ammo[0]);    // both teams start equal
+  });
+});
+
+describe('P3 weapon selection', () => {
+  it('selectWeapon switches the sticky weapon during AIMING', () => {
+    const w = createWorld(1, 1280, 720);
+    stepWorld(w, { ...idle, selectWeapon: 4 });
+    expect(w.selectedWeapon).toBe(4);
+  });
+
+  it('ignores selection of a depleted weapon', () => {
+    const w = createWorld(1, 1280, 720);
+    w.ammo[0][4] = 0; // deplete llama for team 0 (the active team)
+    stepWorld(w, { ...idle, selectWeapon: 4 });
+    expect(w.selectedWeapon).toBe(0); // unchanged
+  });
+});
+
+describe('P3 hash covers economy state', () => {
+  it('selectedWeapon and ammo change the hash', () => {
+    const w = createWorld(1, 1280, 720);
+    const base = hashWorld(w);
+    w.selectedWeapon = 2;
+    expect(hashWorld(w)).not.toBe(base);
+    const w2 = createWorld(1, 1280, 720);
+    w2.ammo[1][3] = 99;
+    expect(hashWorld(w2)).not.toBe(base);
+  });
+});
+
+describe('P3 detonation uses the fired weapon', () => {
+  it('watermelon blast radius (60) hits an ape moonShot (42) would miss', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3; // watermelonBomb
+    w.aim.facing = 1; w.aim.elevation = 0.2; w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    let radius = -1;
+    for (let t = 0; t < 400 && w.shot; t++) {
+      stepWorld(w, idle);
+      const det = w.events.find((e) => e.type === 'detonation');
+      if (det && det.type === 'detonation') radius = det.radius;
+    }
+    expect(radius).toBe(60);
+  });
+});
+
+describe('P3 fire consumes the selected weapon', () => {
+  it('fires the selected weapon and stamps shot.weapon', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3; // watermelon
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true, fireHeld: false }));
+    expect(w.shot).not.toBeNull();
+    expect(w.shot!.weapon).toBe(3);
+  });
+
+  it('deducts finite ammo on launch but never decrements unlimited', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3;
+    const before = w.ammo[0][3];
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.ammo[0][3]).toBe(before - 1);
+
+    const w2 = createWorld(1, 1280, 720); // moonShot (unlimited)
+    w2.aim.power = 1; w2.aim.isCharging = true;
+    stepWorld(w2, mk({ fireReleased: true }));
+    expect(w2.ammo[0][0]).toBe(-1);
+  });
+
+  it('firing a 0-ammo weapon is a no-op', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 4; w.ammo[0][4] = 0;
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.shot).toBeNull();
+  });
+
+  it('reverts selectedWeapon to moonShot (index 0) when the last round of a finite weapon is fired', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 4; // llamaBomb
+    const team = w.apes[w.activeApe].team;
+    w.ammo[team][4] = 1; // exactly one round left
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.ammo[team][4]).toBe(0);
+    expect(w.selectedWeapon).toBe(0); // auto-reverted to moonShot
   });
 });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createWorld, stepWorld, hashWorld } from '../src/sim/World';
 import { createTape, recordTick, replay, verifyTape } from '../src/sim/tape';
-import { demoInputs as scriptedInputs, turnLoopInputs } from '../src/sim/demoMatch';
+import { demoInputs as scriptedInputs, turnLoopInputs, selectThenFireInputs } from '../src/sim/demoMatch';
 
 const W = 1280;
 const H = 720;
@@ -61,5 +61,12 @@ describe('tape replay', () => {
     expect(hashWorld(a)).toBe(hashWorld(b));
     // both teams have acted: the active ape returned to team 0's roster
     expect(a.apes[a.activeApe].team).toBe(0);
+  });
+
+  it('replays a match where a weapon is selected before firing', () => {
+    const tape = createTape(7, W, H);
+    for (const input of selectThenFireInputs()) recordTick(tape, input);
+    const finalHash = hashWorld(replay(tape));
+    expect(verifyTape(tape, finalHash)).toBe(true); // self-consistent re-execution
   });
 });

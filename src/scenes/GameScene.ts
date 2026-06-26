@@ -11,6 +11,8 @@ import { aimAngle } from '../core/aim';
 import { isSolid, columnSurface } from '../physics/DestructibleTerrain';
 import { nextRandom } from '../core/rng';
 import { downloadJson } from '../util/download';
+import { WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
+import { WeaponWheel, slotFromAngle } from '../render/WeaponWheel';
 
 // Terrain variant counts (public/sprites/manifest.json terrainSet entries).
 const TERRAIN_DIRT_COUNT = 13;
@@ -85,6 +87,12 @@ export class GameScene extends Phaser.Scene {
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
+  private wheel!: WeaponWheel;
+  private wheelKey!: Phaser.Input.Keyboard.Key;
+  private numberKeys!: Phaser.Input.Keyboard.Key[];
+  private pendingSelect: number | undefined;
+  private wheelHighlight: number | undefined;
+  private shotSpriteKey: string | null = null;
 
   // Cosmetic effect bookkeeping (read sim state edges; never written back to sim).
   private now = 0;                  // latest Phaser clock time (ms), set each update()
@@ -113,7 +121,11 @@ export class GameScene extends Phaser.Scene {
     this.load.image('apeHurt', 'sprites/apeHurt.png');
     this.load.image('apeVictory', 'sprites/apeVictory.png');
     this.load.image('apeAimArm', 'sprites/apeAimArm.png');
-    this.load.image('moonShot', 'sprites/moonShot.png');
+    for (const id of WEAPON_ORDER) {
+      this.load.image(id, `sprites/${id}.png`);
+      const iconKey = 'icon' + id[0].toUpperCase() + id.slice(1);
+      this.load.image(iconKey, `sprites/icons/${iconKey}.png`);
+    }
     this.load.image('muzzleFlash', 'sprites/muzzleFlash.png');
     this.load.image('smokePuff', 'sprites/smokePuff.png');
     this.load.image('waterSplash', 'sprites/waterSplash.png');
@@ -221,6 +233,17 @@ export class GameScene extends Phaser.Scene {
       fire: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
       save: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T),
     };
+
+    this.wheel = new WeaponWheel(this, WEAPON_ORDER.map(
+      (id) => 'icon' + id[0].toUpperCase() + id.slice(1),
+    ));
+    this.wheelKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
+    this.numberKeys = [
+      Phaser.Input.Keyboard.KeyCodes.ONE, Phaser.Input.Keyboard.KeyCodes.TWO,
+      Phaser.Input.Keyboard.KeyCodes.THREE, Phaser.Input.Keyboard.KeyCodes.FOUR,
+      Phaser.Input.Keyboard.KeyCodes.FIVE, Phaser.Input.Keyboard.KeyCodes.SIX,
+    ].map((c) => keyboard.addKey(c));
+    this.input.keyboard!.addCapture('TAB');
   }
 
   update(time: number, delta: number): void {
@@ -266,22 +289,59 @@ export class GameScene extends Phaser.Scene {
     this.frameInput.fireHeld = this.keys.fire.isDown;
     if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.frameInput.firePressed = true;
     if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.frameInput.fireReleased = true;
+
+    const activeTeam = this.world.apes[this.world.activeApe].team;
+    const ammoRow = this.world.ammo[activeTeam];
+
+    // Number keys 1-6: quick-select weapon (only when that slot has ammo).
+    for (let i = 0; i < this.numberKeys.length; i++) {
+      if (Phaser.Input.Keyboard.JustDown(this.numberKeys[i]) && ammoRow[i] !== 0) {
+        this.pendingSelect = i;
+      }
+    }
+
+    // Radial wheel: hold Tab to open, arrows to navigate, release to confirm.
+    if (this.wheelKey.isDown) {
+      if (!this.wheel.isOpen) {
+        const ape = this.world.apes[this.world.activeApe];
+        this.wheel.open(ape.x, ape.y - APE_HEIGHT);
+      }
+      const dx = (this.keys.right.isDown ? 1 : 0) - (this.keys.left.isDown ? 1 : 0);
+      const dy = (this.keys.down.isDown ? 1 : 0) - (this.keys.up.isDown ? 1 : 0);
+      const hi = (dx || dy) ? slotFromAngle(dx, dy, WEAPON_ORDER.length) : this.world.selectedWeapon;
+      this.wheel.update(hi, ammoRow.slice(), this.world.selectedWeapon);
+      this.wheelHighlight = hi;
+    } else if (this.wheel.isOpen) {
+      this.wheel.close();
+      if (
+        this.wheelHighlight !== undefined &&
+        this.wheelHighlight !== this.world.selectedWeapon &&
+        ammoRow[this.wheelHighlight] !== 0
+      ) {
+        this.pendingSelect = this.wheelHighlight;
+      }
+      this.wheelHighlight = undefined;
+    }
   }
 
   /** Build the input for one tick, consuming edges so they fire exactly once. */
   private takeTickInput(): TickInput {
     const fi = this.frameInput;
+    // While the wheel is held the arrow keys drive slot navigation — suppress aim.
+    const wheelOpen = this.wheelKey.isDown;
     const input: TickInput = {
-      aimUp: fi.aimUp,
-      aimDown: fi.aimDown,
-      aimLeft: fi.aimLeft,
-      aimRight: fi.aimRight,
+      aimUp: wheelOpen ? false : fi.aimUp,
+      aimDown: wheelOpen ? false : fi.aimDown,
+      aimLeft: wheelOpen ? false : fi.aimLeft,
+      aimRight: wheelOpen ? false : fi.aimRight,
       fireHeld: fi.fireHeld,
       firePressed: fi.firePressed,
       fireReleased: fi.fireReleased,
+      selectWeapon: this.pendingSelect,
     };
     fi.firePressed = false;
     fi.fireReleased = false;
+    this.pendingSelect = undefined;
     return input;
   }
 
@@ -393,9 +453,12 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (w.shot) {
-      if (!this.shotSprite) {
-        this.shotSprite = this.add.image(0, 0, 'moonShot');
+      const shotKey = WEAPON_ORDER[w.shot.weapon];
+      if (!this.shotSprite || this.shotSpriteKey !== shotKey) {
+        this.shotSprite?.destroy();
+        this.shotSprite = this.add.image(0, 0, shotKey);
         this.shotSprite.setScale(36 / this.shotSprite.width); // ~36px long
+        this.shotSpriteKey = shotKey;
       }
       const sx = lerp(w.shot.prevPos.x, w.shot.state.pos.x, alpha);
       const sy = lerp(w.shot.prevPos.y, w.shot.state.pos.y, alpha);
@@ -412,6 +475,7 @@ export class GameScene extends Phaser.Scene {
     } else if (this.shotSprite) {
       this.shotSprite.destroy();
       this.shotSprite = null;
+      this.shotSpriteKey = null;
       // Shot ended below the world with no detonation → it plopped into the water.
       if (this.lastShotPos.y > w.height) this.spawnSplash(this.lastShotPos.x, w.height);
     }
@@ -425,8 +489,11 @@ export class GameScene extends Phaser.Scene {
     const secs = Math.ceil(w.turnTimer / FIXED_HZ);
     const face = w.aim.facing > 0 ? '▶' : '◀';
     const elev = (w.aim.elevation * 180 / Math.PI).toFixed(0);
+    const wName = weaponAt(w.selectedWeapon).name;
+    const ammoVal = w.ammo[active.team][w.selectedWeapon];
+    const ammoStr = ammoVal < 0 ? '∞' : String(ammoVal);
     this.hud.setText(
-      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   [←/→ face · ↑/↓ aim · hold SPACE · T save]`,
+      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   Weapon ${wName} (${ammoStr})   [←/→ face · ↑/↓ aim · hold SPACE · T save]`,
     );
 
     if (w.phase === 'GAMEOVER') {
