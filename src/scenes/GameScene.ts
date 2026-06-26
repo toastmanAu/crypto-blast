@@ -37,8 +37,8 @@ const MUZZLE_FLASH_MS = 110;     // brief barrel flash on launch
 const SMOKE_TRAIL_MS = 60;       // min gap between rocket smoke puffs
 const HURT_POSE_MS = 450;        // how long the hurt pose holds after taking damage
 
-// idle/hurt art faces LEFT; walk/jump art faces RIGHT (manifest facings differ).
-type ApeAnim = 'idle' | 'walk' | 'air' | 'hurt';
+// idle/hurt art faces LEFT; walk/jump/victory art faces RIGHT (manifest facings differ).
+type ApeAnim = 'idle' | 'walk' | 'air' | 'hurt' | 'victory';
 
 const POWER_BAR_WIDTH = 200;
 // Fixed for now; later the match seed comes from the lobby / chain.
@@ -111,6 +111,7 @@ export class GameScene extends Phaser.Scene {
   preload(): void {
     this.load.image('apeIdle', 'sprites/apeIdle.png');
     this.load.image('apeHurt', 'sprites/apeHurt.png');
+    this.load.image('apeVictory', 'sprites/apeVictory.png');
     this.load.image('apeAimArm', 'sprites/apeAimArm.png');
     this.load.image('moonShot', 'sprites/moonShot.png');
     this.load.image('muzzleFlash', 'sprites/muzzleFlash.png');
@@ -331,8 +332,10 @@ export class GameScene extends Phaser.Scene {
 
       // Pick animation state from sim velocities + terrain (render-only).
       const grounded = isSolid(w.mask, ape.x, ape.y + APE_HEIGHT / 2 + 1);
+      const isWinner = w.phase === 'GAMEOVER' && w.winner === ape.team && liveApe;
       let state: ApeAnim;
-      if (hurt) state = 'hurt';
+      if (isWinner) state = 'victory';        // surviving apes of the winning team celebrate
+      else if (hurt) state = 'hurt';
       else if (!liveApe || (grounded && Math.abs(ape.velX) <= APE_MOVE_EPS)) state = 'idle';
       else if (!grounded) state = 'air';
       else state = 'walk';
@@ -348,7 +351,7 @@ export class GameScene extends Phaser.Scene {
 
       // Facing: idle/hurt art faces LEFT, walk/jump face RIGHT — so the flip inverts by texture.
       const facingRight = i === w.activeApe ? w.aim.facing > 0 : ape.team === 0;
-      const artFacesRight = state === 'walk' || state === 'air';
+      const artFacesRight = state === 'walk' || state === 'air' || state === 'victory';
       sprite.flipX = artFacesRight ? !facingRight : facingRight;
 
       const bar = this.healthBars[i];
@@ -482,7 +485,10 @@ export class GameScene extends Phaser.Scene {
       sprite.play('apeWalkCycle');
     } else {
       sprite.anims.stop();
-      const tex = state === 'air' ? 'apeJump' : state === 'hurt' ? 'apeHurt' : 'apeIdle';
+      const tex = state === 'air' ? 'apeJump'
+        : state === 'hurt' ? 'apeHurt'
+        : state === 'victory' ? 'apeVictory'
+        : 'apeIdle';
       sprite.setTexture(tex);
       this.scaleApe(sprite);
     }

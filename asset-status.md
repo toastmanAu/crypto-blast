@@ -58,7 +58,7 @@ seed → same ground → identical replays). Re-tiles on every carve.
 | A4 | Walk cycle (×4) | `walk_0.png`–`walk_3.png` | ✅ (faces right; walk_3 has magenta speck) |
 | A5 | Jump / launched | `jump_0.png`–`jump_3.png` | ✅ (4-frame arc, faces right) |
 | A6 | Hurt / knockback | `worried_ape.png` | ✅ |
-| A7 | Victory / celebrate | — | ❌ |
+| A7 | Victory / celebrate | `ape_victory.png` | ✅ (faces right; shown on GAMEOVER) |
 
 ## Batch B — Weapons & projectiles
 | ID | Prompt | File | Status |
@@ -98,7 +98,7 @@ Prompts ready & filename-stamped in `flux-prompts.md` (each carries an **Export 
 "Next wave" table for the row/category each needs.
 | ID | Prompt | Export filename | Art | Wired in prep-assets.py? |
 |----|--------|-----------------|-----|--------------------------|
-| D1 | Weapon-wheel icons (×8) | `icon_<weaponId>.png` | ❌ | ✅ ICONS category |
+| D1 | Weapon-wheel icons | `wheel_*.png` → `icon<WeaponId>` | ✅ 6/10 (rocket,gas,crate,melon,llama,portal) | ✅ ICONS table (prepped; awaits P3 wheel to render) |
 | D2 | Health / name bar frame | `ui_healthbar.png` | ❌ | ✅ UI (no-trim) |
 | D3 | Wind gauge | `ui_wind.png` | ❌ | ✅ UI (no-trim) |
 | D4 | Power meter | `ui_power.png` | ❌ | ✅ UI (no-trim) |
@@ -113,7 +113,8 @@ never mutating `WorldState`, so `hashWorld`/replays stay bit-identical):
 - **Effects:** explosion (existing) + **muzzleFlash** (shot-launch rising edge), **smokePuff**
   (rocket trail + post-blast linger), **waterSplash** (ape/shot crossing the waterline).
 - **Ape poses:** idle/walk/jump (existing) + **apeHurt** (held `HURT_POSE_MS` after a health drop),
-  + **apeAimArm** (shoulder-pivot arm on the active ape during AIMING).
+  + **apeAimArm** (shoulder-pivot arm on the active ape during AIMING),
+  + **apeVictory** (surviving apes of the winning team on GAMEOVER).
 - **Decor:** **decorCrystal** ×7 scattered along the surface, seeded off `MATCH_SEED` on a LOCAL
   rng chain (never `world.rng`).
 - ⚠️ **aimArm rotation** uses a derived `-angle - π/2` mapping + `[0.57,0.06]` pivot — wired and

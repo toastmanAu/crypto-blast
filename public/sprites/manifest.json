@@ -143,6 +143,14 @@
       "facing": "left"
     },
     {
+      "key": "apeVictory",
+      "kind": "image",
+      "file": "sprites/apeVictory.png",
+      "width": 544,
+      "height": 764,
+      "facing": "right"
+    },
+    {
       "key": "apeAimArm",
       "kind": "image",
       "file": "sprites/apeAimArm.png",
@@ -254,6 +262,57 @@
         0.5,
         1.0
       ]
+    },
+    {
+      "key": "iconMoonShot",
+      "kind": "icon",
+      "file": "sprites/icons/iconMoonShot.png",
+      "width": 227,
+      "height": 389,
+      "weaponId": "moonShot"
+    },
+    {
+      "key": "iconGasGrenade",
+      "kind": "icon",
+      "file": "sprites/icons/iconGasGrenade.png",
+      "width": 257,
+      "height": 301,
+      "weaponId": "gasGrenade",
+      "magentaCleaned": 28
+    },
+    {
+      "key": "iconAirdropCluster",
+      "kind": "icon",
+      "file": "sprites/icons/iconAirdropCluster.png",
+      "width": 574,
+      "height": 817,
+      "weaponId": "airdropCluster",
+      "magentaCleaned": 1
+    },
+    {
+      "key": "iconWatermelonBomb",
+      "kind": "icon",
+      "file": "sprites/icons/iconWatermelonBomb.png",
+      "width": 285,
+      "height": 349,
+      "weaponId": "watermelonBomb"
+    },
+    {
+      "key": "iconLlamaBomb",
+      "kind": "icon",
+      "file": "sprites/icons/iconLlamaBomb.png",
+      "width": 752,
+      "height": 879,
+      "weaponId": "llamaBomb",
+      "magentaCleaned": 4
+    },
+    {
+      "key": "iconBridge",
+      "kind": "icon",
+      "file": "sprites/icons/iconBridge.png",
+      "width": 707,
+      "height": 637,
+      "weaponId": "bridge"
     },
     {
       "key": "apeWalk",
