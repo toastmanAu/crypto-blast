@@ -41,3 +41,15 @@ export function turnLoopInputs(): TickInput[] {
   fireOnce(); // team 1
   return inputs;
 }
+
+/** Select watermelon (index 3), aim, charge, fire — exercises the selectWeapon path. */
+export function selectThenFireInputs(): TickInput[] {
+  const inputs: TickInput[] = [];
+  inputs.push(mk({ selectWeapon: 3 }));            // confirm a selection on tick 0
+  for (let t = 0; t < 10; t++) inputs.push(mk({ aimUp: true }));
+  inputs.push(mk({ firePressed: true, fireHeld: true }));
+  for (let t = 0; t < 30; t++) inputs.push(mk({ fireHeld: true }));
+  inputs.push(mk({ fireReleased: true }));
+  for (let t = 0; t < 250; t++) inputs.push(idle);
+  return inputs;
+}
