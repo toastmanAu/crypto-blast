@@ -10,7 +10,7 @@
 import { TerrainMask, generateTerrainMask } from '../terrain/TerrainGenerator';
 import { isSolid, carveCircle, columnSurface } from '../physics/DestructibleTerrain';
 import { stepProjectile, ProjectileState, Vec2 } from '../physics/ProjectilePhysics';
-import { WEAPONS, WEAPON_ORDER } from '../weapons/weaponData';
+import { WEAPONS, WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
 import {
   AimState, createAim, aimAngle, adjustElevation, setFacing, startCharge, updateCharge, release,
 } from '../core/aim';
@@ -267,7 +267,10 @@ function rerollTurn(world: WorldState): void {
 
 function fire(world: WorldState, power: number): void {
   if (power <= 0) return;
-  const weapon = WEAPONS.moonShot;
+  const i = world.selectedWeapon;
+  const team = world.apes[world.activeApe].team;
+  if (world.ammo[team][i] === 0) return; // empty: cannot fire
+  const weapon = weaponAt(i);
   const speed = power * weapon.launchSpeed;
   const angle = aimAngle(world.aim);
   const m = muzzle(world);
@@ -277,8 +280,9 @@ function fire(world: WorldState, power: number): void {
       pos: { x: m.x, y: m.y },
       vel: { x: Math.cos(angle) * speed, y: -Math.sin(angle) * speed },
     },
-    weapon: 0, // stopgap: Task 4 replaces this with world.selectedWeapon
+    weapon: i,
   };
+  if (world.ammo[team][i] > 0) world.ammo[team][i]--; // -1 stays unlimited
 }
 
 function settleApes(world: WorldState): void {

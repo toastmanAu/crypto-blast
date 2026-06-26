@@ -194,3 +194,36 @@ describe('P3 weapon selection', () => {
     expect(w.selectedWeapon).toBe(0); // unchanged
   });
 });
+
+describe('P3 fire consumes the selected weapon', () => {
+  it('fires the selected weapon and stamps shot.weapon', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3; // watermelon
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true, fireHeld: false }));
+    expect(w.shot).not.toBeNull();
+    expect(w.shot!.weapon).toBe(3);
+  });
+
+  it('deducts finite ammo on launch but never decrements unlimited', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3;
+    const before = w.ammo[0][3];
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.ammo[0][3]).toBe(before - 1);
+
+    const w2 = createWorld(1, 1280, 720); // moonShot (unlimited)
+    w2.aim.power = 1; w2.aim.isCharging = true;
+    stepWorld(w2, mk({ fireReleased: true }));
+    expect(w2.ammo[0][0]).toBe(-1);
+  });
+
+  it('firing a 0-ammo weapon is a no-op', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 4; w.ammo[0][4] = 0;
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.shot).toBeNull();
+  });
+});
