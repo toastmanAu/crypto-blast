@@ -27,3 +27,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# subagent-driven-development scratch (orchestration logs, not source)
+.superpowers/
