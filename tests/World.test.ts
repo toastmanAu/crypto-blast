@@ -195,6 +195,22 @@ describe('P3 weapon selection', () => {
   });
 });
 
+describe('P3 detonation uses the fired weapon', () => {
+  it('watermelon blast radius (60) hits an ape moonShot (42) would miss', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 3; // watermelonBomb
+    w.aim.facing = 1; w.aim.elevation = 0.2; w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    let radius = -1;
+    for (let t = 0; t < 400 && w.shot; t++) {
+      stepWorld(w, idle);
+      const det = w.events.find((e) => e.type === 'detonation');
+      if (det && det.type === 'detonation') radius = det.radius;
+    }
+    expect(radius).toBe(60);
+  });
+});
+
 describe('P3 fire consumes the selected weapon', () => {
   it('fires the selected weapon and stamps shot.weapon', () => {
     const w = createWorld(1, 1280, 720);

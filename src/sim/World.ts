@@ -324,7 +324,7 @@ function settleApes(world: WorldState): void {
 function advanceShot(world: WorldState): void {
   if (!world.shot) return;
   world.shot.prevPos = { x: world.shot.state.pos.x, y: world.shot.state.pos.y };
-  const weapon = WEAPONS.moonShot;
+  const weapon = weaponAt(world.shot.weapon);
   const sub = FIXED_DT / SHOT_SUBSTEPS;
   for (let i = 0; i < SHOT_SUBSTEPS; i++) {
     world.shot.state = stepProjectile(world.shot.state, weapon.projectile, world.wind, sub);
@@ -341,7 +341,7 @@ function advanceShot(world: WorldState): void {
 function detonate(world: WorldState, x: number, y: number, radius: number): void {
   carveCircle(world.mask, x, y, radius);
   world.events.push({ type: 'detonation', x, y, radius });
-  const weapon = WEAPONS.moonShot;
+  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
 }
 
