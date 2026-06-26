@@ -57,8 +57,12 @@ export class WeaponWheel {
     for (let i = 0; i < this.icons.length; i++) {
       const empty = ammo[i] === 0;
       const isHi = i === highlight;
-      this.icons[i].setAlpha(empty ? 0.3 : 1)
-        .setScale(isHi ? 1.0 : 0.82)
+      // Size in DISPLAY pixels — never setScale(), which would override the
+      // tiny scale setDisplaySize computed and snap the icon back to its
+      // (large, per-icon-varying) native resolution.
+      const size = ICON_SIZE * (isHi ? 1.15 : 0.9);
+      this.icons[i].setDisplaySize(size, size)
+        .setAlpha(empty ? 0.3 : 1)
         .setTint(i === selected ? 0x66ff99 : 0xffffff);
       this.counts[i].setText(ammo[i] < 0 ? '∞' : String(ammo[i]));
     }
