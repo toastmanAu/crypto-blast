@@ -106,6 +106,22 @@ Prompts ready & filename-stamped in `flux-prompts.md` (each carries an **Export 
 | D6 | Parallax mid (islands) | `bg_mid.png` | ❌ | ✅ BACKGROUNDS |
 | D7 | Title art / logo lockup | `ui_title.png` | ❌ | ✅ UI (trim) |
 
+## Engine integration (GameScene render layer)
+Distinct from prep: a sprite is "engine-wired" only when `GameScene` loads + renders it.
+As of 2026-06-27 the render layer wires (all **render-only**, derived from sim-state edges —
+never mutating `WorldState`, so `hashWorld`/replays stay bit-identical):
+- **Effects:** explosion (existing) + **muzzleFlash** (shot-launch rising edge), **smokePuff**
+  (rocket trail + post-blast linger), **waterSplash** (ape/shot crossing the waterline).
+- **Ape poses:** idle/walk/jump (existing) + **apeHurt** (held `HURT_POSE_MS` after a health drop),
+  + **apeAimArm** (shoulder-pivot arm on the active ape during AIMING).
+- **Decor:** **decorCrystal** ×7 scattered along the surface, seeded off `MATCH_SEED` on a LOCAL
+  rng chain (never `world.rng`).
+- ⚠️ **aimArm rotation** uses a derived `-angle - π/2` mapping + `[0.57,0.06]` pivot — wired and
+  error-free, but the exact orientation still wants a live eyeball tweak (as the prep notes flagged).
+- **Still NOT wired (blocked on P3 arsenal):** the 9 non-moonShot weapon sprites + companions
+  (gasGrenade, airdropCluster/Coin, watermelonBomb/Seed, diamondHands, llamaBomb, pumpPunch,
+  whaleDump, honeypotMine, bridge) — they need `WeaponDef` entries in `weaponData.ts` first.
+
 ## Summary
 - **Weapons:** 10/10 + both companions — **complete**. Full P3 starter arsenal skinned.
 - **Ape:** 5/7 art entries. base + hurt + walk×4 + jump×4 + aim-arm done. Still need **idle (A3)** and

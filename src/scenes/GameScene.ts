@@ -8,7 +8,7 @@ import {
 } from '../sim/World';
 import { GameTape, createTape, recordTick } from '../sim/tape';
 import { aimAngle } from '../core/aim';
-import { isSolid } from '../physics/DestructibleTerrain';
+import { isSolid, columnSurface } from '../physics/DestructibleTerrain';
 import { nextRandom } from '../core/rng';
 import { downloadJson } from '../util/download';
 
@@ -28,9 +28,17 @@ const TEAM1_COLOUR = 0xdd5577;   // pink team marker pad
 const APE_DISPLAY_H = APE_HEIGHT * 1.5; // on-screen ape height (sprites scale to this)
 const APE_MOVE_EPS = 6;          // px/s on the ground above which the ape "walks"
 const JUMP_VY_EPS = 60;          // |velY| band around the apex for the peak frame
+const APE_BODY_ART_H = 763;      // px height of the body art canvas (idle); aim-arm shares its per-px scale
 
-// idle art faces LEFT; walk/jump art faces RIGHT (manifest facings differ).
-type ApeAnim = 'idle' | 'walk' | 'air';
+// Render-only decor + one-shot effects (cosmetic; never touch the sim/tape).
+const DECOR_CRYSTAL_COUNT = 7;   // public/sprites/decor/crystal_NN.png variants available
+const CRYSTAL_SCATTER_COUNT = 5; // how many crystals to place along the surface per match
+const MUZZLE_FLASH_MS = 110;     // brief barrel flash on launch
+const SMOKE_TRAIL_MS = 60;       // min gap between rocket smoke puffs
+const HURT_POSE_MS = 450;        // how long the hurt pose holds after taking damage
+
+// idle/hurt art faces LEFT; walk/jump art faces RIGHT (manifest facings differ).
+type ApeAnim = 'idle' | 'walk' | 'air' | 'hurt';
 
 const POWER_BAR_WIDTH = 200;
 // Fixed for now; later the match seed comes from the lobby / chain.
@@ -73,9 +81,19 @@ export class GameScene extends Phaser.Scene {
   private activeMarker!: Phaser.GameObjects.Triangle;
   private banner!: Phaser.GameObjects.Text;
   private shotSprite: Phaser.GameObjects.Image | null = null;
+  private aimArm!: Phaser.GameObjects.Image;
   private aimLine!: Phaser.GameObjects.Line;
   private powerBar!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
+
+  // Cosmetic effect bookkeeping (read sim state edges; never written back to sim).
+  private now = 0;                  // latest Phaser clock time (ms), set each update()
+  private hadShot = false;          // shot present last frame — rising edge = launch (muzzle flash)
+  private lastSmokeAt = 0;          // last rocket-trail puff time (ms)
+  private lastShotPos = { x: 0, y: 0 }; // last in-flight shot position (for water-exit splash)
+  private prevHealth: number[] = []; // per-ape health last frame — a drop triggers the hurt pose
+  private hurtUntil: number[] = [];  // per-ape clock time until which the hurt pose holds
+  private apeWet: boolean[] = [];    // per-ape: splash already played when it hit the water
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -92,7 +110,12 @@ export class GameScene extends Phaser.Scene {
 
   preload(): void {
     this.load.image('apeIdle', 'sprites/apeIdle.png');
+    this.load.image('apeHurt', 'sprites/apeHurt.png');
+    this.load.image('apeAimArm', 'sprites/apeAimArm.png');
     this.load.image('moonShot', 'sprites/moonShot.png');
+    this.load.image('muzzleFlash', 'sprites/muzzleFlash.png');
+    this.load.image('smokePuff', 'sprites/smokePuff.png');
+    this.load.image('waterSplash', 'sprites/waterSplash.png');
     this.load.spritesheet('explosion', 'sprites/explosion.png', {
       frameWidth: EXPLOSION_FRAME_W, frameHeight: EXPLOSION_FRAME_H,
     });
@@ -112,6 +135,11 @@ export class GameScene extends Phaser.Scene {
     this.load.image('terrainDirt', `sprites/terrain/dirt_${p2(Math.floor(r1.value * TERRAIN_DIRT_COUNT))}.png`);
     this.load.image('terrainRock', `sprites/terrain/rock_${p2(Math.floor(r2.value * TERRAIN_ROCK_COUNT))}.png`);
     this.load.image('terrainGrass', `sprites/terrain/grass_${p2(Math.floor(r3.value * TERRAIN_GRASS_COUNT))}.png`);
+
+    // Decor crystal variants (scattered render-only in create()).
+    for (let i = 0; i < DECOR_CRYSTAL_COUNT; i++) {
+      this.load.image(`decorCrystal${i}`, `sprites/decor/crystal_${p2(i)}.png`);
+    }
   }
 
   create(): void {
@@ -124,6 +152,7 @@ export class GameScene extends Phaser.Scene {
       grass: this.texToImageData('terrainGrass'),
     });
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
+    this.scatterCrystals(); // decor: drawn above terrain, below the apes added later
 
     this.anims.create({
       key: 'explode',
@@ -157,6 +186,18 @@ export class GameScene extends Phaser.Scene {
       this.apeAnimState.push('idle');
     }
 
+    // Per-ape effect trackers (parallel to apeSprites).
+    this.prevHealth = this.world.apes.map((a) => a.health);
+    this.hurtUntil = this.world.apes.map(() => 0);
+    this.apeWet = this.world.apes.map(() => false);
+
+    // Shoulder-pivot aim arm for the active ape (origin = recorded shoulder ball).
+    // Drawn after the apes so it overlays the body; only shown while AIMING.
+    this.aimArm = this.add.image(0, 0, 'apeAimArm')
+      .setOrigin(0.57, 0.06)
+      .setScale(APE_DISPLAY_H / APE_BODY_ART_H)
+      .setVisible(false);
+
     for (let i = 0; i < this.world.apes.length; i++) {
       this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5));
     }
@@ -181,7 +222,8 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
-  update(_time: number, delta: number): void {
+  update(time: number, delta: number): void {
+    this.now = time;
     this.sampleInput();
 
     this.accumulator += delta / 1000;
@@ -251,6 +293,7 @@ export class GameScene extends Phaser.Scene {
         boom.setScale((ev.radius * 2.5) / EXPLOSION_FRAME_W);
         boom.play('explode');
         boom.once('animationcomplete', () => boom.destroy());
+        this.spawnSmoke(ev.x, ev.y); // lingering smoke where the blast hit
       }
     }
   }
@@ -275,10 +318,22 @@ export class GameScene extends Phaser.Scene {
       sprite.y = ry + APE_HEIGHT / 2; // bottom-anchored at the feet
       sprite.setAlpha(liveApe ? 1 : 0.2);
 
+      // Health dropped this frame → a blast/fall just hit; hold the hurt pose briefly.
+      if (ape.health < this.prevHealth[i] - 0.01) this.hurtUntil[i] = this.now + HURT_POSE_MS;
+      this.prevHealth[i] = ape.health;
+      const hurt = liveApe && this.now < this.hurtUntil[i];
+
+      // Splash once when an ape crosses the waterline (sim has no event for this).
+      if (!this.apeWet[i] && ape.y > w.height) {
+        this.apeWet[i] = true;
+        this.spawnSplash(rx, w.height);
+      }
+
       // Pick animation state from sim velocities + terrain (render-only).
       const grounded = isSolid(w.mask, ape.x, ape.y + APE_HEIGHT / 2 + 1);
       let state: ApeAnim;
-      if (!liveApe || (grounded && Math.abs(ape.velX) <= APE_MOVE_EPS)) state = 'idle';
+      if (hurt) state = 'hurt';
+      else if (!liveApe || (grounded && Math.abs(ape.velX) <= APE_MOVE_EPS)) state = 'idle';
       else if (!grounded) state = 'air';
       else state = 'walk';
 
@@ -291,9 +346,9 @@ export class GameScene extends Phaser.Scene {
         sprite.setFrame(ape.velY < -JUMP_VY_EPS ? 1 : ape.velY > JUMP_VY_EPS ? 3 : 2);
       }
 
-      // Facing: idle art faces LEFT, walk/jump face RIGHT — so the flip inverts by texture.
+      // Facing: idle/hurt art faces LEFT, walk/jump face RIGHT — so the flip inverts by texture.
       const facingRight = i === w.activeApe ? w.aim.facing > 0 : ape.team === 0;
-      const artFacesRight = state !== 'idle';
+      const artFacesRight = state === 'walk' || state === 'air';
       sprite.flipX = artFacesRight ? !facingRight : facingRight;
 
       const bar = this.healthBars[i];
@@ -315,22 +370,49 @@ export class GameScene extends Phaser.Scene {
       this.activeMarker.y = lerp(active.prevY, active.y, alpha) - APE_HEIGHT / 2 - 18;
     }
 
+    // Shoulder-pivot aim arm on the active ape, rotated to the aim angle.
+    this.aimArm.setVisible(showMarker);
+    if (showMarker) {
+      const ax = lerp(active.prevX, active.x, alpha);
+      const ay = lerp(active.prevY, active.y, alpha);
+      const angle = aimAngle(w.aim); // math angle, y-up
+      this.aimArm.setPosition(ax, ay - APE_HEIGHT * 0.25); // shoulder height
+      // Arm art hangs straight down (screen +y) at rotation 0; rotate so it points
+      // along the aim. screen-down is +π/2, target screen angle is -angle.
+      this.aimArm.setRotation(-angle - Math.PI / 2);
+      this.aimArm.setFlipX(w.aim.facing < 0);
+    }
+
+    // Rising edge of the shot = it just launched → muzzle flash at the barrel.
+    if (w.shot && !this.hadShot) {
+      const m = muzzle(w);
+      this.spawnMuzzleFlash(m.x, m.y, w.aim.facing >= 0);
+    }
+
     if (w.shot) {
       if (!this.shotSprite) {
         this.shotSprite = this.add.image(0, 0, 'moonShot');
         this.shotSprite.setScale(36 / this.shotSprite.width); // ~36px long
       }
-      this.shotSprite.setPosition(
-        lerp(w.shot.prevPos.x, w.shot.state.pos.x, alpha),
-        lerp(w.shot.prevPos.y, w.shot.state.pos.y, alpha),
-      );
+      const sx = lerp(w.shot.prevPos.x, w.shot.state.pos.x, alpha);
+      const sy = lerp(w.shot.prevPos.y, w.shot.state.pos.y, alpha);
+      this.shotSprite.setPosition(sx, sy);
+      this.lastShotPos = { x: sx, y: sy };
       // Point the nose along the velocity (screen y is down, so atan2(vy, vx)).
       const { x: vx, y: vy } = w.shot.state.vel;
       this.shotSprite.setRotation(Math.atan2(vy, vx));
+      // Drip a fading smoke puff behind the rocket.
+      if (this.now - this.lastSmokeAt > SMOKE_TRAIL_MS) {
+        this.lastSmokeAt = this.now;
+        this.spawnSmoke(sx, sy);
+      }
     } else if (this.shotSprite) {
       this.shotSprite.destroy();
       this.shotSprite = null;
+      // Shot ended below the world with no detonation → it plopped into the water.
+      if (this.lastShotPos.y > w.height) this.spawnSplash(this.lastShotPos.x, w.height);
     }
+    this.hadShot = !!w.shot;
 
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
     this.aimLine.setVisible(showMarker);
@@ -350,6 +432,48 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Scatter decorative crystals along the surface. Render-only, so it uses a
+   * LOCAL rng chain seeded off MATCH_SEED (never world.rng) — stable across
+   * reloads/replays without ever feeding the sim hash.
+   */
+  private scatterCrystals(): void {
+    let r = nextRandom((MATCH_SEED ^ 0x5eed) >>> 0);
+    for (let i = 0; i < CRYSTAL_SCATTER_COUNT; i++) {
+      const fx = nextRandom(r.next);  // x position fraction
+      const fk = nextRandom(fx.next); // variant + scale jitter
+      r = fk;
+      const x = Math.floor(GAME_WIDTH * (0.08 + 0.84 * fx.value));
+      const surfaceY = columnSurface(this.world.mask, x);
+      if (surfaceY == null) continue; // empty column (e.g. a gap) — skip
+      const variant = Math.floor(fk.value * DECOR_CRYSTAL_COUNT);
+      this.add.image(x, surfaceY + 2, `decorCrystal${variant}`)
+        .setOrigin(0.5, 1) // bottom-anchored: base sits on the ground
+        .setScale(0.16 + 0.10 * fk.value);
+    }
+  }
+
+  /** One-shot barrel flash at launch (additive, fades fast). */
+  private spawnMuzzleFlash(x: number, y: number, faceRight: boolean): void {
+    const f = this.add.image(x, y, 'muzzleFlash')
+      .setScale(0.12)
+      .setFlipX(!faceRight)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: f, alpha: 0, scale: 0.18, duration: MUZZLE_FLASH_MS, onComplete: () => f.destroy() });
+  }
+
+  /** Fading smoke puff (rocket trail / lingering after a blast). */
+  private spawnSmoke(x: number, y: number): void {
+    const s = this.add.image(x, y, 'smokePuff').setScale(0.10).setAlpha(0.6);
+    this.tweens.add({ targets: s, alpha: 0, scale: 0.22, duration: 600, onComplete: () => s.destroy() });
+  }
+
+  /** Water splash plume at the waterline (ape or shot entering the water). */
+  private spawnSplash(x: number, y: number): void {
+    const s = this.add.image(x, y, 'waterSplash').setOrigin(0.5, 1).setScale(0.3).setAlpha(0.9);
+    this.tweens.add({ targets: s, y: y - 10, alpha: 0, duration: 700, onComplete: () => s.destroy() });
+  }
+
   /** Swap an ape sprite to the texture/anim for its state, re-scaling to display height. */
   private applyApeState(sprite: Phaser.GameObjects.Sprite, state: ApeAnim): void {
     if (state === 'walk') {
@@ -358,7 +482,8 @@ export class GameScene extends Phaser.Scene {
       sprite.play('apeWalkCycle');
     } else {
       sprite.anims.stop();
-      sprite.setTexture(state === 'air' ? 'apeJump' : 'apeIdle');
+      const tex = state === 'air' ? 'apeJump' : state === 'hurt' ? 'apeHurt' : 'apeIdle';
+      sprite.setTexture(tex);
       this.scaleApe(sprite);
     }
   }
