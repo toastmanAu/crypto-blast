@@ -10,7 +10,7 @@
 import { TerrainMask, generateTerrainMask } from '../terrain/TerrainGenerator';
 import { isSolid, carveCircle, columnSurface } from '../physics/DestructibleTerrain';
 import { stepProjectile, ProjectileState, Vec2 } from '../physics/ProjectilePhysics';
-import { WEAPONS } from '../weapons/weaponData';
+import { WEAPONS, WEAPON_ORDER } from '../weapons/weaponData';
 import {
   AimState, createAim, aimAngle, adjustElevation, setFacing, startCharge, updateCharge, release,
 } from '../core/aim';
@@ -51,6 +51,7 @@ export interface ApeState {
 export interface ShotState {
   state: ProjectileState;
   prevPos: Vec2;
+  weapon: number; // WEAPON_ORDER index this shot was fired with
 }
 
 export type SimEvent = { type: 'detonation'; x: number; y: number; radius: number };
@@ -69,6 +70,8 @@ export interface WorldState {
   resolveTimer: number;  // ticks elapsed in RESOLVING (spiral guard)
   teamNext: [number, number]; // next roster position to act, per team
   winner: number | null; // team index, -1 draw, null ongoing
+  selectedWeapon: number; // sticky WEAPON_ORDER index, default 0
+  ammo: number[][];       // ammo[team][weaponIndex]; -1 = unlimited
   shot: ShotState | null;
   mask: TerrainMask;
   events: SimEvent[];
@@ -117,6 +120,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
   }
 
   const roll = nextRandom(seed >>> 0);
+  const startAmmo = WEAPON_ORDER.map((id) => WEAPONS[id].ammoStart);
   return {
     width,
     height,
@@ -131,6 +135,8 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     resolveTimer: 0,
     teamNext: [1, 0],        // team 0 already acting at pos 0; next is pos 1
     winner: null,
+    selectedWeapon: 0,
+    ammo: [startAmmo.slice(), startAmmo.slice()],
     shot: null,
     mask,
     events: [],
@@ -263,6 +269,7 @@ function fire(world: WorldState, power: number): void {
       pos: { x: m.x, y: m.y },
       vel: { x: Math.cos(angle) * speed, y: -Math.sin(angle) * speed },
     },
+    weapon: 0, // stopgap: Task 4 replaces this with world.selectedWeapon
   };
 }
 

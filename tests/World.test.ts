@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
 } from '../src/sim/World';
+import { WEAPON_ORDER } from '../src/weapons/weaponData';
 
 const W = 1280;
 const H = 720;
@@ -160,5 +161,21 @@ describe('2D ape physics', () => {
     const before = a.health;
     for (let i = 0; i < 5; i++) stepWorld(w, idle);
     expect(a.health).toBeLessThan(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 Arsenal Tasks
+// ---------------------------------------------------------------------------
+
+describe('P3 selection + ammo state', () => {
+  it('createWorld starts on moonShot with a 2 x N ammo matrix from ammoStart', () => {
+    const w = createWorld(1, 1280, 720);
+    expect(w.selectedWeapon).toBe(0);
+    expect(w.ammo.length).toBe(2);
+    expect(w.ammo[0].length).toBe(WEAPON_ORDER.length);
+    expect(w.ammo[0][0]).toBe(-1);           // moonShot unlimited
+    expect(w.ammo[0][3]).toBe(3);            // watermelon starts at 3
+    expect(w.ammo[1]).toEqual(w.ammo[0]);    // both teams start equal
   });
 });
