@@ -282,7 +282,12 @@ function fire(world: WorldState, power: number): void {
     },
     weapon: i,
   };
-  if (world.ammo[team][i] > 0) world.ammo[team][i]--; // -1 stays unlimited
+  if (world.ammo[team][i] > 0) {
+    world.ammo[team][i]--;
+    // When the last round of a finite weapon is spent, revert the sticky selection
+    // to moonShot (index 0) so the next turn's fire trigger is never dead.
+    if (world.ammo[team][i] === 0) world.selectedWeapon = 0;
+  }
 }
 
 function settleApes(world: WorldState): void {
@@ -376,7 +381,7 @@ export function detonateAt(world: WorldState, x: number, y: number, radius: numb
   applyBlast(world, x, y, radius, damage);
 }
 
-/** Deterministic FNV-1a fingerprint over the full world. Field order is FINAL. */
+/** Deterministic FNV-1a fingerprint over the full world. Field order must stay stable across versions to keep replays verifiable. */
 export function hashWorld(world: WorldState): number {
   let h = 2166136261 >>> 0;
   const mix = (n: number): void => {

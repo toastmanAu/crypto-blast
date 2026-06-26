@@ -309,11 +309,15 @@ export class GameScene extends Phaser.Scene {
       const dx = (this.keys.right.isDown ? 1 : 0) - (this.keys.left.isDown ? 1 : 0);
       const dy = (this.keys.down.isDown ? 1 : 0) - (this.keys.up.isDown ? 1 : 0);
       const hi = (dx || dy) ? slotFromAngle(dx, dy, WEAPON_ORDER.length) : this.world.selectedWeapon;
-      this.wheel.update(hi, ammoRow, this.world.selectedWeapon);
+      this.wheel.update(hi, ammoRow.slice(), this.world.selectedWeapon);
       this.wheelHighlight = hi;
     } else if (this.wheel.isOpen) {
       this.wheel.close();
-      if (this.wheelHighlight !== undefined && ammoRow[this.wheelHighlight] !== 0) {
+      if (
+        this.wheelHighlight !== undefined &&
+        this.wheelHighlight !== this.world.selectedWeapon &&
+        ammoRow[this.wheelHighlight] !== 0
+      ) {
         this.pendingSelect = this.wheelHighlight;
       }
       this.wheelHighlight = undefined;

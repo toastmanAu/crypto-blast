@@ -254,4 +254,15 @@ describe('P3 fire consumes the selected weapon', () => {
     stepWorld(w, mk({ fireReleased: true }));
     expect(w.shot).toBeNull();
   });
+
+  it('reverts selectedWeapon to moonShot (index 0) when the last round of a finite weapon is fired', () => {
+    const w = createWorld(1, 1280, 720);
+    w.selectedWeapon = 4; // llamaBomb
+    const team = w.apes[w.activeApe].team;
+    w.ammo[team][4] = 1; // exactly one round left
+    w.aim.power = 1; w.aim.isCharging = true;
+    stepWorld(w, mk({ fireReleased: true }));
+    expect(w.ammo[team][4]).toBe(0);
+    expect(w.selectedWeapon).toBe(0); // auto-reverted to moonShot
+  });
 });
