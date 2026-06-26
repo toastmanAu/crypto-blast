@@ -195,6 +195,18 @@ describe('P3 weapon selection', () => {
   });
 });
 
+describe('P3 hash covers economy state', () => {
+  it('selectedWeapon and ammo change the hash', () => {
+    const w = createWorld(1, 1280, 720);
+    const base = hashWorld(w);
+    w.selectedWeapon = 2;
+    expect(hashWorld(w)).not.toBe(base);
+    const w2 = createWorld(1, 1280, 720);
+    w2.ammo[1][3] = 99;
+    expect(hashWorld(w2)).not.toBe(base);
+  });
+});
+
 describe('P3 detonation uses the fired weapon', () => {
   it('watermelon blast radius (60) hits an ape moonShot (42) would miss', () => {
     const w = createWorld(1, 1280, 720);

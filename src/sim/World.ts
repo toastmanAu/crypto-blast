@@ -406,12 +406,17 @@ export function hashWorld(world: WorldState): number {
   mixF(world.aim.elevation);
   mixF(world.aim.power);
   mix(world.aim.isCharging ? 1 : 0);
+  mix(world.selectedWeapon);
+  for (let t = 0; t < world.ammo.length; t++) {
+    for (let i = 0; i < world.ammo[t].length; i++) mix(world.ammo[t][i]);
+  }
   mix(world.shot ? 1 : 0);
   if (world.shot) {
     mixF(world.shot.state.pos.x);
     mixF(world.shot.state.pos.y);
     mixF(world.shot.state.vel.x);
     mixF(world.shot.state.vel.y);
+    mix(world.shot.weapon);
   }
   const { data } = world.mask;
   for (let i = 0; i < data.length; i++) mix(data[i]);
