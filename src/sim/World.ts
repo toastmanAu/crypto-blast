@@ -85,6 +85,7 @@ export interface TickInput {
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
+  selectWeapon?: number; // set only on the tick a selection is confirmed
 }
 
 /** True if an ape is still in play. */
@@ -165,6 +166,13 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   }
 
   if (world.phase === 'AIMING') {
+    if (input.selectWeapon !== undefined) {
+      const i = input.selectWeapon;
+      const team = world.apes[world.activeApe].team;
+      if (i >= 0 && i < WEAPON_ORDER.length && world.ammo[team][i] !== 0) {
+        world.selectedWeapon = i;
+      }
+    }
     const aim = world.aim;
     if (input.aimUp) adjustElevation(aim, 1, FIXED_DT);
     if (input.aimDown) adjustElevation(aim, -1, FIXED_DT);

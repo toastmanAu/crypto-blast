@@ -179,3 +179,18 @@ describe('P3 selection + ammo state', () => {
     expect(w.ammo[1]).toEqual(w.ammo[0]);    // both teams start equal
   });
 });
+
+describe('P3 weapon selection', () => {
+  it('selectWeapon switches the sticky weapon during AIMING', () => {
+    const w = createWorld(1, 1280, 720);
+    stepWorld(w, { ...idle, selectWeapon: 4 });
+    expect(w.selectedWeapon).toBe(4);
+  });
+
+  it('ignores selection of a depleted weapon', () => {
+    const w = createWorld(1, 1280, 720);
+    w.ammo[0][4] = 0; // deplete llama for team 0 (the active team)
+    stepWorld(w, { ...idle, selectWeapon: 4 });
+    expect(w.selectedWeapon).toBe(0); // unchanged
+  });
+});
