@@ -5,9 +5,11 @@
 //! load-bearing **court** path (tag=1): a trustless on-chain replay that
 //! adjudicates a disputed match and binds the payout to the real winner.
 //!
-//! # `lock.args` (112 bytes)
+//! # `lock.args` (145 bytes)
 //! ```text
-//! player0_id(20) ‖ player1_id(20) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖ deadline_block(8 LE)
+//! expected_payout_code_hash(32) ‖ expected_payout_hash_type(1) ‖
+//! player0_id(20) ‖ player1_id(20) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖
+//! deadline_block(8 LE)
 //! ```
 //! `playerN_id` is the player's **blake160** (first 20 bytes of
 //! `blake2b256(compressed_pubkey, "ckb-default-hash")`) — the secp256k1-blake160
@@ -18,13 +20,22 @@
 //! task-4-report.md for the reconciliation.) `deadline_block` is unused by the
 //! court path (Path 2 / refund consumes it).
 //!
+//! `expected_payout_code_hash` ‖ `expected_payout_hash_type` PIN the recipient
+//! lock SCRIPT (not just its args). Both players spend with the same canonical
+//! system lock (secp256k1-blake160), so a single pinned identity binds both
+//! payout destinations. Without this pin a losing player could create an output
+//! with `lock.args == winner_blake160` but a `code_hash` THEY control
+//! (e.g. always-success) and sweep the pot — the prize-theft vuln this fix
+//! closes. `hash_type` byte follows ckb-types `HashType`: 0=data, 1=type,
+//! 2=data1.
+//!
 //! # Court witness (`witness[0].lock`, GroupInput)
 //! ```text
 //! tag=1(1) ‖ nonce0(32) ‖ nonce1(32) ‖ attested_envelope(..)
 //! ```
 //!
 //! # Algorithm
-//! 1. parse 112-byte args; parse the court witness.
+//! 1. parse 145-byte args; parse the court witness.
 //! 2. `blake2b(nonceN, ckb-default-hash) == nonceN_commit` for both.
 //! 3. `seed = derive_seed(nonce0, nonce1)`.
 //! 4. `decode_attested(envelope)`; `w = create_world(seed, 1280, 720)`.
@@ -33,7 +44,8 @@
 //!    lockhash of the player whose team is active AT BLOCK START; then
 //!    `step_world` over EVERY tick of the block (no early GAMEOVER break).
 //! 6. read `w.winner` (0/1/-1); assert the tx outputs pay the pot to the
-//!    winner's id (or 50/50 split on -1).
+//!    winner's id (or 50/50 split on -1) UNDER THE PINNED PAYOUT LOCK
+//!    (code_hash + hash_type + args all match).
 //! 7. exit 0 iff all hold; distinct nonzero codes otherwise.
 //!
 //! secp256k1 recovery is bundled (k256) rather than dynamic-loaded — see
@@ -131,9 +143,16 @@ mod contract {
     const E_ACTOR_MISMATCH: i8 = 11;
     const E_NO_WINNER: i8 = 12;
     const E_PAYOUT: i8 = 13;
+    const E_ACTIVE_APE_OOB: i8 = 14; // M1: malformed replay → out-of-range active ape
+    const E_SYSCALL: i8 = 15; // M2: non-IndexOutOfBound syscall error (fail closed)
+    const E_EQUAL_IDS: i8 = 16; // M3: player0_id == player1_id
 
     const ID_LEN: usize = 20;
-    const ARGS_LEN: usize = ID_LEN * 2 + 32 * 2 + 8; // 112
+    const CODE_HASH_LEN: usize = 32;
+    const HASH_TYPE_LEN: usize = 1;
+    // expected_payout_code_hash(32) ‖ hash_type(1) ‖ p0(20) ‖ p1(20)
+    //   ‖ commit0(32) ‖ commit1(32) ‖ deadline(8) = 145
+    const ARGS_LEN: usize = CODE_HASH_LEN + HASH_TYPE_LEN + ID_LEN * 2 + 32 * 2 + 8; // 145
 
     fn ckb_blake2b(input: &[u8]) -> [u8; 32] {
         let mut h = Blake2bBuilder::new(32)
@@ -154,7 +173,10 @@ mod contract {
     }
 
     /// Sum the capacities of all GroupInput cells (the pot).
-    fn pot_capacity() -> u64 {
+    ///
+    /// Fail-closed (M2): break ONLY on `IndexOutOfBound`; any other syscall error
+    /// returns `E_SYSCALL` rather than silently under-counting the pot.
+    fn pot_capacity() -> Result<u64, i8> {
         let mut total: u64 = 0;
         let mut i = 0;
         loop {
@@ -164,31 +186,49 @@ mod contract {
                     i += 1;
                 }
                 Err(SysError::IndexOutOfBound) => break,
-                Err(_) => break,
+                Err(_) => return Err(E_SYSCALL),
             }
         }
-        total
+        Ok(total)
     }
 
-    /// Sum the capacities of all outputs whose lock args equal `target` (20 bytes).
-    fn paid_to(target: &[u8]) -> u64 {
+    /// Sum the capacities of all outputs whose lock is EXACTLY the pinned payout
+    /// script for `target`: `code_hash == expected_code_hash`,
+    /// `hash_type (byte) == expected_hash_type`, AND `args == target` (20 bytes).
+    ///
+    /// Pinning code_hash + hash_type (not just args) is the prize-theft fix: an
+    /// output carrying the winner's id under an attacker-controlled lock is NOT
+    /// counted. Fail-closed (M2): non-IndexOutOfBound syscall errors → `E_SYSCALL`.
+    fn paid_to(
+        target: &[u8],
+        expected_code_hash: &[u8],
+        expected_hash_type: u8,
+    ) -> Result<u64, i8> {
         let mut total: u64 = 0;
         let mut i = 0;
         loop {
             let lock = match load_cell_lock(i, Source::Output) {
                 Ok(s) => s,
                 Err(SysError::IndexOutOfBound) => break,
-                Err(_) => break,
+                Err(_) => return Err(E_SYSCALL),
             };
+            let code_hash = lock.code_hash();
+            let hash_type: u8 = lock.hash_type().into();
             let args = lock.args().raw_data();
-            if args.len() == target.len() && args.as_ref() == target {
-                if let Ok(c) = load_cell_capacity(i, Source::Output) {
-                    total = total.saturating_add(c);
+            if code_hash.raw_data().as_ref() == expected_code_hash
+                && hash_type == expected_hash_type
+                && args.len() == target.len()
+                && args.as_ref() == target
+            {
+                match load_cell_capacity(i, Source::Output) {
+                    Ok(c) => total = total.saturating_add(c),
+                    Err(SysError::IndexOutOfBound) => break,
+                    Err(_) => return Err(E_SYSCALL),
                 }
             }
             i += 1;
         }
-        total
+        Ok(total)
     }
 
     fn program_entry() -> i8 {
@@ -206,11 +246,23 @@ mod contract {
         if args.len() != ARGS_LEN {
             return E_ARGS_LEN;
         }
-        let player0_id = &args[0..ID_LEN];
-        let player1_id = &args[ID_LEN..ID_LEN * 2];
-        let commit0 = &args[ID_LEN * 2..ID_LEN * 2 + 32];
-        let commit1 = &args[ID_LEN * 2 + 32..ID_LEN * 2 + 64];
-        // args[104..112] = deadline_block — unused by the court path.
+        // Layout: code_hash(32) ‖ hash_type(1) ‖ p0(20) ‖ p1(20)
+        //   ‖ commit0(32) ‖ commit1(32) ‖ deadline(8).
+        let payout_code_hash = &args[0..CODE_HASH_LEN];
+        let payout_hash_type = args[CODE_HASH_LEN];
+        let id_base = CODE_HASH_LEN + HASH_TYPE_LEN; // 33
+        let player0_id = &args[id_base..id_base + ID_LEN];
+        let player1_id = &args[id_base + ID_LEN..id_base + ID_LEN * 2];
+        let commit_base = id_base + ID_LEN * 2; // 73
+        let commit0 = &args[commit_base..commit_base + 32];
+        let commit1 = &args[commit_base + 32..commit_base + 64];
+        // args[137..145] = deadline_block — unused by the court path.
+
+        // M3: distinct player identities — a self-match would make actor
+        // attribution and payout binding ambiguous.
+        if player0_id == player1_id {
+            return E_EQUAL_IDS;
+        }
 
         let wit = match load_witness_args(0, Source::GroupInput) {
             Ok(w) => w,
@@ -259,7 +311,13 @@ mod contract {
         let mut world = create_world(seed, 1280, 720);
         for (i, block) in blocks.iter().enumerate() {
             // Expected actor = player who owns the active ape's team AT BLOCK START.
-            let active_team = world.apes[world.active_ape as usize].team;
+            // M1: a malformed replay must never panic (a panicking lock = an
+            // unspendable cell / DoS); fail closed on an out-of-range index.
+            let active_ape = match world.apes.get(world.active_ape as usize) {
+                Some(a) => a,
+                None => return E_ACTIVE_APE_OOB,
+            };
+            let active_team = active_ape.team;
             let expected_id: &[u8] = if active_team == 0 {
                 player0_id
             } else {
@@ -295,13 +353,26 @@ mod contract {
             None => return E_NO_WINNER,
         };
 
-        let pot = pot_capacity();
+        let pot = match pot_capacity() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        // The winner must receive the FULL pot under the pinned payout lock; the
+        // network fee therefore comes from a SEPARATE fee input (Plan B builder).
+        let to0 = match paid_to(player0_id, payout_code_hash, payout_hash_type) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let to1 = match paid_to(player1_id, payout_code_hash, payout_hash_type) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
         let ok = match winner {
-            0 => paid_to(player0_id) >= pot,
-            1 => paid_to(player1_id) >= pot,
+            0 => to0 >= pot,
+            1 => to1 >= pot,
             -1 => {
                 let half = pot / 2;
-                paid_to(player0_id) >= half && paid_to(player1_id) >= half
+                to0 >= half && to1 >= half
             }
             _ => false,
         };

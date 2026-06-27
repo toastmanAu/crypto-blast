@@ -40,13 +40,16 @@ This is **sub-project 1 of Phase 4** (the "full session protocol"). Tournaments/
 
 The pot (both stakes) is the escrow cell's capacity. The cell's lock is the new **escrow-lock** script.
 
-**`lock.args`** (136 bytes = 4×32 + 8):
+**`lock.args`** (145 bytes — as implemented):
 ```
-player0_lockhash(32) ‖ player1_lockhash(32) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖ deadline_block(8 LE u64)
+expected_payout_code_hash(32) ‖ expected_payout_hash_type(1) ‖ player0_id(20) ‖ player1_id(20) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖ deadline_block(8 LE u64)
 ```
-- `playerN_lockhash` — each player's secp256k1 lock hash; serves as identity (move-sig attribution), payout destination, and refund destination.
+- `expected_payout_code_hash` ‖ `expected_payout_hash_type` — the **pinned recipient lock SCRIPT** identity (set in production to the canonical secp256k1-blake160 system lock). The payout output's lock must match this code_hash AND hash_type (byte: 0=data, 1=type, 2=data1) AND args, not merely the args. **This pin closes a critical prize-theft vuln:** without it a losing player could create an output with `lock.args == winner_id` but a `code_hash` they control (e.g. always-success) and sweep the pot. Both players spend with the same canonical secp lock, so one pinned identity binds both payout destinations.
+- `playerN_id` — each player's **blake160** (20 bytes, first 20 of `blake2b256(compressed_pubkey)`); serves as identity (move-sig attribution), payout-args destination, and refund destination. (The original sketch used a 32-byte lockhash; the implemented identity is the 20-byte pubkey-hash, matching the attestation fixtures + the `blake160(recovered_pubkey)` actor check — see task-4-report.md.)
 - `nonceN_commit = blake2b(nonceN)` — the seed commitments.
 - `deadline_block` — absolute block number after which the refund path opens.
+
+> Earlier drafts of this section listed 136 bytes (4×32 + 8) and 112 bytes (2×20 + 2×32 + 8); the implemented court binary uses **145 bytes** = `code_hash(32) ‖ hash_type(1) ‖ p0_id(20) ‖ p1_id(20) ‖ commit0(32) ‖ commit1(32) ‖ deadline(8)`.
 
 **Spend path is selected by a 1-byte tag at the head of `witness[0].lock`.**
 
@@ -63,7 +66,7 @@ Lock asserts:
 - `seed = blake2b(nonce0 ‖ nonce1)`, reduced to the `create_world` i32 cursor as its first 4 bytes LE (TS and Rust must agree on this reduction — byte-conformance tested);
 - the attested tape's per-turn signatures are valid and attributed to the correct acting player (Section 5);
 - replay `create_world(seed, 1280, 720)` + `step_world` over the decoded tape → final world; read `winner` (0 / 1 / -1);
-- the tx output(s) pay the pot to the winner's lockhash (or 50/50 split on `winner == -1`).
+- the tx output(s) pay the pot to the winner's id **under the pinned payout lock** (code_hash + hash_type + args must all match the `expected_payout_*` args), or 50/50 split on `winner == -1`. The winner must receive the FULL pot, so the network fee comes from a separate fee input (court-tx builder requirement).
 
 ### Path 2 — Refund (timeout) — stall handling
 Witness: `tag=2`. Valid only if the tx's `since` ≥ `deadline_block` (absolute block lock). Lock asserts the pot splits 50/50 back to `player0_lockhash`/`player1_lockhash`.
@@ -132,7 +135,7 @@ TS side (crypto-blast, beside `tapeBinary.ts`): `signTurnBlock` / `encodeAtteste
 - a verifiable-match mode in `tournament-manager.js` that replaces the trusted Score Cell with escrow + attested settlement.
 
 **Tests:**
-- `verifier/contract` ckb-testtool: Path 0 (pays agreed winner / rejects single-sig), Path 1 (replays attested tape → pays real winner / rejects forged-move / rejects wrong-seed / rejects payout-to-loser), Path 2 (refund only after deadline).
+- `verifier/contract` ckb-testtool: Path 0 (pays agreed winner / rejects single-sig), Path 1 (replays attested tape → pays real winner / rejects forged-move / rejects wrong-seed / rejects payout-to-loser / rejects payout-to-winner-args-under-wrong-lock), Path 2 (refund only after deadline).
 - crypto-blast TS: attestation round-trip + actor attribution; seed commit-reveal.
 - FiberQuest: settlement tx builders (structural, offline) + a gated **manual** testnet match (no autonomous broadcast).
 
