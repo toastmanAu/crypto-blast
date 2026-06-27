@@ -67,6 +67,9 @@ pub use physics::*;
 mod world;
 pub use world::*;
 
+mod tape;
+pub use tape::*;
+
 /// blake2b-256 with CKB's `ckb-default-hash` personalization — byte-identical
 /// to the chain's native ckbhash and to the TS `commitWorld` digest.
 ///

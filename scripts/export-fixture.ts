@@ -1,6 +1,6 @@
 // Dumps the canonical bytes + golden commitment of a fixed world, so the Rust
 // kernel can be cross-checked against the exact TS output. Run via vite-node.
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { createWorld, commitWorld } from '../src/sim/World';
 import { serializeWorld, toHex } from '../src/sim/serialize';
 import { nextRandom } from '../src/core/rng';
@@ -62,3 +62,10 @@ function dumpTape(name: string, seed: number, inputs: ReturnType<typeof demoInpu
 dumpTape('demo', 1234, demoInputs());
 dumpTape('turnloop', 1234, turnLoopInputs());
 dumpTape('selectfire', 7, selectThenFireInputs());
+
+import { tapeToBytes } from '../src/sim/tapeBinary';
+for (const name of ['demo', 'turnloop', 'selectfire']) {
+  const t = JSON.parse(readFileSync(`verifier/tests/tape-${name}.json`, 'utf8'));
+  writeFileSync(`verifier/tests/tape-${name}.bin`, Buffer.from(tapeToBytes(t.inputs)));
+  console.log(`exported tape-${name}.bin (${t.inputs.length} ticks)`);
+}
