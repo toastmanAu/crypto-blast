@@ -244,3 +244,21 @@ fn binary_tape_decodes_and_replays_to_ts_commitment() {
         assert_eq!(got, want.trim(), "binary tape {name} commitment diverges");
     }
 }
+
+#[test]
+fn midflight_tape_byte_proves_shot_present_branch() {
+    let bytes = std::fs::read("tests/tape-midflight.bin").unwrap();
+    let want = std::fs::read_to_string("tests/tape-midflight.hash").unwrap();
+    let mut w = create_world(7, 1280, 720);
+    for input in decode_tape(&bytes) { step_world(&mut w, &input); }
+    assert!(w.shot.is_some(), "midflight world should have shot present");
+    assert_eq!(format!("0x{}", hex(&ckbhash(&serialize_world(&w)))), want.trim());
+}
+
+#[test]
+fn winner_set_serializes_byte_identical_to_ts() {
+    let want_bytes = std::fs::read("tests/fixture-winner.bin").unwrap();
+    let mut w = create_world(1234, 1280, 720);
+    w.winner = Some(0);
+    assert_eq!(serialize_world(&w), want_bytes, "winner!=null serialize diverges from TS");
+}
