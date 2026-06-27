@@ -93,3 +93,11 @@ for (const name of ['demo', 'turnloop', 'selectfire']) {
   writeFileSync('verifier/tests/fixture-winner.hash', toHex(commitWorld(w)));
   console.log('exported fixture-winner');
 }
+
+// Seed commit-reveal conformance vector.
+import { deriveSeed } from '../src/sim/seed';
+{
+  const a = new Uint8Array(32).fill(1), b = new Uint8Array(32).fill(2);
+  writeFileSync('verifier/tests/fixture-seed.txt', String(deriveSeed(a, b)));
+}
+console.log('exported fixture-seed');
