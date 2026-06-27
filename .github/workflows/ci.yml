@@ -25,12 +25,8 @@ jobs:
       - name: Run tests (vitest, 85 tests)
         run: npm test
 
-      # `npm run build` (tsc && vite build) fails because scripts/build-verify-tx.ts
-      # is pulled in transitively via tests/buildVerifyTx.test.ts and uses node:fs /
-      # node:process which are not in the tsconfig types list.  The vite bundle
-      # (which excludes that script) builds cleanly, so we run it directly.
-      - name: Build (vite bundle)
-        run: npx vite build
+      - name: Build (tsc + vite bundle)
+        run: npm run build
 
   # ── 2. Rust verifier library (host conformance + riscv64 no_std) ────────────
   rust:
