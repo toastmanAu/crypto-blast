@@ -1,4 +1,5 @@
 use verifier::ckbhash;
+use verifier::quantize;
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
@@ -14,4 +15,13 @@ fn ckbhash_matches_known_vectors() {
         hex(&ckbhash(&[0x01, 0x02, 0x03])),
         "6b7d21825cf86b41012f22fdba33238d90fd14c2555ea7b03c486c459099f579"
     );
+}
+
+#[test]
+fn quantize_matches_js_math_round() {
+    assert_eq!(quantize(89.5), 89_500);       // floor(89500.5) = 89500
+    assert_eq!(quantize(0.0), 0);
+    assert_eq!(quantize(-0.0025), -2);        // JS Math.round(-2.5) = -2, NOT -3
+    assert_eq!(quantize(0.0025), 3);          // 0.0025*1000 = 2.5, floor(3.0) = 3
+    assert_eq!(quantize(-1.5), -1500);
 }

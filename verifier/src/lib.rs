@@ -11,3 +11,12 @@ pub fn ckbhash(bytes: &[u8]) -> [u8; 32] {
     hasher.finalize(&mut out);
     out
 }
+
+pub const FLOAT_SCALE: f64 = 1000.0;
+
+/// Fixed-point quantization matching JS `Math.round(v * FLOAT_SCALE)`.
+/// CRITICAL: JS Math.round is `floor(x + 0.5)` (half toward +inf), which differs
+/// from Rust f64::round (half away from zero) on negative half-integers.
+pub fn quantize(v: f64) -> i64 {
+    (v * FLOAT_SCALE + 0.5).floor() as i64
+}
