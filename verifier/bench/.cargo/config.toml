@@ -1,0 +1,5 @@
+# Default build target for this crate is the bare-metal RISC-V triple that
+# ckb-debugger executes. `cargo build --release` here produces a CKB-VM-runnable
+# ELF without needing an explicit --target flag.
+[build]
+target = "riscv64imac-unknown-none-elf"

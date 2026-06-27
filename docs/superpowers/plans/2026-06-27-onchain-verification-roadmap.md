@@ -372,7 +372,7 @@ git commit -m "bench(verifier): ckb-vm cycle count for commit_world"
 
 **Phase 0 GATE:** All conformance tests green (Rust reproduces both golden vectors and the canonical bytes) **and** a recorded cycle number for `commit_world`. Record result here:
 
-> Phase 0 result (fill in at execution): commit_world = ___ cycles; serialize parity = PASS/FAIL; notes ___.
+> Phase 0 result (2026-06-27): **commit_world = 24,679,515 cycles** (~23.5M) for blake2b-256 (`ckb-default-hash`, 32-byte out) over the 921,988-byte canonical fixture, measured with `ckb-debugger 1.1.1 --mode fast` on `riscv64imac-unknown-none-elf`; ckb-debugger `Run result: 0` (the binary's in-VM correctness gate asserts the hash equals the golden `0x3ab2c2e7…816b`, so exit 0 confirms the right computation). serialize parity = **PASS** (host `cargo test` 4/4). notes: **~6.1× under the ~150M reference** — the hash step alone is cheap, so the full-replay-vs-chunked decision will hinge on Phase-1 `stepWorld` execution cost, not the commitment. Measured with `no_std` `blake2b-ref` (the ckb-ecosystem standard, no-alloc), NOT host `blake2b-rs`, because the `verifier` lib's `serde_json`/`blake2b-rs` deps are `std`-only and cannot target bare-metal riscv; `blake2b-ref` was first verified on host to reproduce the golden hash byte-for-byte. Binary: standalone `verifier/bench/` crate (`include_bytes!` of the fixture), built via `cd verifier/bench && cargo build --release`. The original "`verifier/src/bin/bench.rs` calling `ckbhash`" step was infeasible (std deps) — see `.superpowers/sdd/task-0.6-report.md`.
 
 ---
 

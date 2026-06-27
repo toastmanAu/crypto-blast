@@ -1,0 +1,29 @@
+[package]
+name = "verifier-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone `no_std` measurement binary, intentionally OUTSIDE the `verifier`
+# library crate: that crate depends on `serde_json`/`blake2b-rs` (both `std`),
+# which cannot build for the bare-metal `riscv64imac-unknown-none-elf` target
+# used by ckb-debugger. This crate embeds the canonical fixture and computes the
+# blake2b-256 commitment with a pure-Rust `no_std` blake2b (`blake2b-ref`, the
+# ckb-ecosystem standard) so the measured cycles reflect the Phase-2 on-chain
+# path, not host `blake2b-rs`. See verifier/bench/README is the crate doc-comment
+# in src/main.rs.
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
+
+[dependencies]
+# Pure-Rust, no_std, no-alloc blake2b. Verified to reproduce the golden fixture
+# hash 0x3ab2c2e7...816b byte-for-byte on the host before trusting cycle counts.
+blake2b-ref = { version = "0.3", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
