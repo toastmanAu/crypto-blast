@@ -1,6 +1,7 @@
 use blake2b_ref::Blake2bBuilder;
 use std::fs;
 use verifier::ckbhash;
+use verifier::generate_terrain_mask;
 use verifier::next_random;
 use verifier::quantize;
 use verifier::{dcos, dsin, dsin_full};
@@ -85,6 +86,15 @@ fn blake2b_ref_matches_golden_and_ckbhash() {
         hex(&ckbhash(&bytes)),
         "blake2b-ref and ckbhash (blake2b-rs) diverge"
     );
+}
+
+#[test]
+fn terrain_mask_matches_ts_fixture() {
+    // The committed fixture-mask.bin is the TS generateTerrainMask(1280,720,1234).data
+    let want = std::fs::read("tests/fixture-mask.bin").unwrap();
+    let mask = generate_terrain_mask(1280, 720, 1234);
+    assert_eq!(mask.data.len(), want.len(), "mask length");
+    assert_eq!(mask.data, want, "terrain mask bytes diverge from TS");
 }
 
 #[test]

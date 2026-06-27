@@ -7,6 +7,9 @@ pub use trig::*;
 mod world;
 pub use world::*;
 
+mod terrain;
+pub use terrain::*;
+
 use blake2b_rs::Blake2bBuilder;
 
 /// blake2b-256 with CKB's `ckb-default-hash` personalization — byte-identical
