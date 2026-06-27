@@ -130,5 +130,12 @@ pub fn decode_attested(bytes: &[u8]) -> Option<Vec<AttestedBlock<'_>>> {
         blocks.push(AttestedBlock { tape_bytes, sig });
     }
 
+    // Strict length: reject any trailing bytes after the declared turns. This
+    // closes a witness-malleability gap — an attacker must not be able to append
+    // junk (or extra unsigned blocks) to an otherwise-valid envelope.
+    if offset != bytes.len() {
+        return None;
+    }
+
     Some(blocks)
 }
