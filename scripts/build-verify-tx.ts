@@ -87,6 +87,12 @@ export interface AssembleVerifyTxResult {
  * placeholder outpoints (all-zero tx_hash, index 0) for the input and the
  * code cell dep; the caller replaces them with live on-chain values before
  * signing.
+ *
+ * IMPORTANT: `txSkeleton.witnesses[0].lock` contains the RAW tape bytes (hex).
+ * Before passing to ckb-cli, wrap them in a WitnessArgs molecule:
+ *   WitnessArgs { lock: Some(<tape bytes>), input_type: None, output_type: None }
+ * The verifier-lock reads the tape via `load_witness_args(0, GroupInput).lock()`,
+ * so raw bytes always yield exit 3.  See docs/VERIFIER_DEPLOY.md Step 5.
  */
 export function assembleVerifyTx(input: AssembleVerifyTxInput): AssembleVerifyTxResult {
   const { codeHash, seed, commitment, tapeBytes } = input;

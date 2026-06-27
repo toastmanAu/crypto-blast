@@ -18,7 +18,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -108,22 +108,33 @@ location = { file = "${BINARY_PATH}" }
   writeFileSync(configPath, deployConfig.trimStart());
   console.log(`\nDeployment config: ${configPath}`);
 
-  // Step 1: Generate unsigned deploy transactions.
-  console.log('\n[1/3] Generating deploy transactions (ckb-cli deploy gen-txs)...');
-  const genStatus = ckbCli([
-    'deploy',
-    'gen-txs',
-    '--deployment-config', configPath,
-    '--migration-dir', migrationDir,
-    '--info-file', infoFile,
-    '--from-address', fromAddress,
-    '--fee-rate', '1200',
-    '--sign-now',
-    '--privkey-path', `/dev/stdin`,
-    '--api-uri', rpcUrl,
-  ]);
-  // Note: --sign-now signs inline; we pipe the privkey via /dev/stdin.
-  // In practice the user passes --privkey-path to a file or uses the env-based approach.
+  // Write the private key to a 0600 temp file so ckb-cli can read it
+  // without it ever appearing on the terminal or in a pipe.
+  const privkeyFile = join(workDir, 'privkey.hex');
+  let genStatus: number;
+  try {
+    writeFileSync(privkeyFile, privKey, { encoding: 'utf8' });
+    chmodSync(privkeyFile, 0o600);
+
+    // Step 1: Generate unsigned deploy transactions.
+    console.log('\n[1/3] Generating deploy transactions (ckb-cli deploy gen-txs)...');
+    genStatus = ckbCli([
+      '--output-format', 'json',
+      'deploy',
+      'gen-txs',
+      '--deployment-config', configPath,
+      '--migration-dir', migrationDir,
+      '--info-file', infoFile,
+      '--from-address', fromAddress,
+      '--fee-rate', '1200',
+      '--sign-now',
+      '--privkey-path', privkeyFile,
+      '--api-uri', rpcUrl,
+    ]);
+  } finally {
+    // Always delete the key file, even if gen-txs throws or fails.
+    try { unlinkSync(privkeyFile); } catch { /* already gone */ }
+  }
 
   if (genStatus !== 0) {
     fail(`gen-txs failed with exit code ${genStatus}`);

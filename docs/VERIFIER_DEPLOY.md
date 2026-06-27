@@ -215,22 +215,27 @@ ckb-cli tx add-output \
   --lock-hash-type type \
   --lock-args <your lock args>
 
-# 5. Set the witness: tape bytes as witnesses[0].lock
+# 5. Set the witness: tape bytes wrapped in a WitnessArgs molecule.
+#
+#    The verifier-lock reads the tape via load_witness_args(0, GroupInput).lock(),
+#    so witnesses[0] MUST be a WitnessArgs molecule with the tape in its .lock field.
+#    Raw tape bytes always yield exit 3.
+#
+#    WitnessArgs { lock: Some(<tape>), input_type: None, output_type: None }
+#    Molecule layout: total(4 LE) | off[lock](4 LE) | off[input_type](4 LE) | off[output_type](4 LE) | lock_len(4 LE) | tape
+#
 TAPE_HEX=$(xxd -p /tmp/tape.bin | tr -d '\n')
+WITNESS_HEX=$(python3 -c "
+import struct
+tape = bytes.fromhex('${TAPE_HEX}')
+n = len(tape)
+after_lock = 16 + 4 + n
+header = struct.pack('<IIII', after_lock, 16, after_lock, after_lock)
+print('0x' + (header + struct.pack('<I', n) + tape).hex())
+")
 ckb-cli tx add-witness \
   --tx-file /tmp/verify-tx.json \
-  --witness "0x${TAPE_HEX}"
-# ^^^ The verifier-lock reads witnesses[0].lock via WitnessArgs; some versions
-# of ckb-cli accept raw bytes here.  If the lock uses WitnessArgs, wrap:
-# python3 -c "
-#   import struct, sys
-#   tape = bytes.fromhex('${TAPE_HEX}')
-#   lock_len = struct.pack('<I', len(tape))
-#   # WitnessArgs molecule: total_len(4) + field_offsets(3×4) + lock_len(4) + lock_bytes
-#   offsets = struct.pack('<III', 16, 16, 16 + 4 + len(tape))
-#   total = 4 + 12 + 4 + len(tape)
-#   print('0x' + struct.pack('<I', total).hex() + offsets.hex() + lock_len.hex() + tape.hex())
-# "
+  --witness "$WITNESS_HEX"
 
 # 6. Sign (the verifier-lock validates the tape, not the secp sig; but the
 #    change output lock is a standard secp lock that needs signing)
