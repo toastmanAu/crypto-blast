@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 blake2b-rs = "0.2"
+# serde drives the WorldState mirror's #[derive(Deserialize)] and the test-only
+# fixture loader; both live in the library so they are regular dependencies.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

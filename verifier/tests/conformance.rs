@@ -1,6 +1,7 @@
 use std::fs;
 use verifier::ckbhash;
 use verifier::quantize;
+use verifier::{load_fixture_world, serialize_world};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
@@ -20,11 +21,18 @@ fn ckbhash_matches_known_vectors() {
 
 #[test]
 fn quantize_matches_js_math_round() {
-    assert_eq!(quantize(89.5), 89_500);       // floor(89500.5) = 89500
+    assert_eq!(quantize(89.5), 89_500); // floor(89500.5) = 89500
     assert_eq!(quantize(0.0), 0);
-    assert_eq!(quantize(-0.0025), -2);        // JS Math.round(-2.5) = -2, NOT -3
-    assert_eq!(quantize(0.0025), 3);          // 0.0025*1000 = 2.5, floor(3.0) = 3
+    assert_eq!(quantize(-0.0025), -2); // JS Math.round(-2.5) = -2, NOT -3
+    assert_eq!(quantize(0.0025), 3); // 0.0025*1000 = 2.5, floor(3.0) = 3
     assert_eq!(quantize(-1.5), -1500);
+}
+
+#[test]
+fn serialize_world_matches_ts_bytes() {
+    let want = fs::read("tests/fixture-initial.bin").expect("run scripts/export-fixture.ts");
+    let world = load_fixture_world("tests/fixture-initial.json", "tests/fixture-mask.bin");
+    assert_eq!(serialize_world(&world), want);
 }
 
 #[test]
