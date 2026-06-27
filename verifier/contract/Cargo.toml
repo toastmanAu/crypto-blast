@@ -45,6 +45,12 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa", "arith
 [dev-dependencies]
 ckb-testtool = "1.1"
 hex = "0.4"
+# Host-side recoverable secp signing for the Path-0 (happy) tests: the signed
+# payout message binds the escrow's RUNTIME OutPoint (created by ckb-testtool),
+# so the two player sigs must be produced inside the test rather than pre-baked.
+# Same crate/version as the contract's bundled recovery; the fixture player keys
+# are the scalars 1 and 2 (priv byte31 = 1 / 2).
+k256 = { version = "0.13", features = ["ecdsa"] }
 # Host-side replay in the escrow test: computes the real winner + nonce commits
 # (verifier::ckbhash) so the test asserts payout against the actually-simulated
 # result, not a hard-coded one.

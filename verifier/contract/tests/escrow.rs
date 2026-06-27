@@ -25,10 +25,12 @@ use ckb_testtool::{
     },
     context::Context,
 };
+use k256::ecdsa::SigningKey;
 use verifier::{create_world, decode_attested, decode_tape, derive_seed, step_world};
 
 const ESCROW_BIN: &str = "target/riscv64imac-unknown-none-elf/release/escrow-lock";
 const POT: u64 = 100_000;
+const HALF: u64 = POT / 2;
 
 /// The dummy recipient (payout) lock code. Output locks never execute, so its
 /// body is irrelevant; only its IDENTITY (code_hash + hash_type) is pinned in
@@ -255,6 +257,241 @@ fn rejects_payout_to_loser() {
 /// that is NOT the pinned payout code_hash). The args-only binding would have
 /// passed and let the attacker sweep the pot. With the code_hash + hash_type pin
 /// the output is NOT counted toward the winner → the spend MUST reject.
+// ===========================================================================
+// Path 0 — HAPPY (mutual-signed payout)  and  Path 2 — REFUND (timeout split)
+// ===========================================================================
+
+/// The two fixture player secp keys: scalars 1 and 2 (priv byte31 = 1 / 2) —
+/// the same keys that produced `fixture-attested-lockhashes.txt`, so their
+/// blake160 ids are exactly `player_ids()`.
+fn signing_keys() -> (SigningKey, SigningKey) {
+    let mut k0 = [0u8; 32];
+    k0[31] = 1;
+    let mut k1 = [0u8; 32];
+    k1[31] = 2;
+    (
+        SigningKey::from_slice(&k0).expect("player0 key"),
+        SigningKey::from_slice(&k1).expect("player1 key"),
+    )
+}
+
+/// A wrong key (scalar 9) used to forge a "valid-but-wrong-signer" signature.
+fn wrong_key() -> SigningKey {
+    let mut k = [0u8; 32];
+    k[31] = 9;
+    SigningKey::from_slice(&k).expect("wrong key")
+}
+
+/// Produce a `[v(1) ‖ r(32) ‖ s(32)]` recoverable signature over the 32-byte
+/// prehash — the layout the escrow-lock recovers (recovery byte first, v∈{0,1}).
+fn sign_recoverable(key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
+    let (sig, recid) = key.sign_prehash_recoverable(msg).expect("sign");
+    let mut out = Vec::with_capacity(65);
+    out.push(recid.to_byte());
+    out.extend_from_slice(&sig.to_bytes());
+    out
+}
+
+/// 145-byte escrow args with an explicit `deadline_block` (refund path reads it;
+/// happy/court ignore it). Commits are zero — happy/refund don't use them.
+fn build_args_deadline(
+    p0: &[u8; 20],
+    p1: &[u8; 20],
+    c0: &[u8; 32],
+    c1: &[u8; 32],
+    deadline: u64,
+) -> Vec<u8> {
+    let mut a = build_args(p0, p1, c0, c1);
+    // Overwrite the trailing 8-byte deadline (build_args wrote 0).
+    a.truncate(137);
+    a.extend_from_slice(&deadline.to_le_bytes());
+    assert_eq!(a.len(), 145);
+    a
+}
+
+/// Assemble + verify a Path-0 (happy) spend. The signed message binds the
+/// escrow's RUNTIME OutPoint, so the cell is created first, then both keys sign
+/// `blake2b(outpoint ‖ agreed_winner)`. `outputs` get the pinned payout lock.
+fn run_happy(
+    args: Vec<u8>,
+    agreed_winner: u8,
+    key0: &SigningKey,
+    key1: &SigningKey,
+    outputs: &[(Vec<u8>, u64)],
+) -> Result<u64, ckb_testtool::ckb_error::Error> {
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(ESCROW_BIN)
+        .expect("escrow-lock binary missing — build it for riscv64imac-unknown-none-elf first")
+        .into();
+    let escrow_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&escrow_out, Bytes::from(args))
+        .expect("build escrow lock");
+
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+
+    // message = blake2b(escrow_input_outpoint ‖ agreed_winner).
+    let mut preimage = input_cell.as_slice().to_vec();
+    preimage.push(agreed_winner);
+    let msg = verifier::ckbhash(&preimage);
+
+    let mut witness_lock = Vec::with_capacity(1 + 1 + 65 + 65);
+    witness_lock.push(0u8); // tag = 0 (happy)
+    witness_lock.push(agreed_winner);
+    witness_lock.extend_from_slice(&sign_recoverable(key0, &msg));
+    witness_lock.extend_from_slice(&sign_recoverable(key1, &msg));
+
+    let input = CellInput::new_builder()
+        .previous_output(input_cell)
+        .build();
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(witness_lock)).pack())
+        .build();
+
+    let mut tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack());
+    for (id, cap) in outputs {
+        tb = tb
+            .output(
+                CellOutput::new_builder()
+                    .capacity(*cap)
+                    .lock(pinned_payout_lock(id))
+                    .build(),
+            )
+            .output_data(Bytes::new().pack());
+    }
+    let tx = ctx.complete_tx(tb.build());
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
+}
+
+/// Assemble + verify a Path-2 (refund) spend with the GroupInput `since` set to
+/// `since` (an absolute block number when the top byte is 0). `outputs` get the
+/// pinned payout lock.
+fn run_refund(
+    args: Vec<u8>,
+    since: u64,
+    outputs: &[(Vec<u8>, u64)],
+) -> Result<u64, ckb_testtool::ckb_error::Error> {
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(ESCROW_BIN)
+        .expect("escrow-lock binary missing — build it for riscv64imac-unknown-none-elf first")
+        .into();
+    let escrow_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&escrow_out, Bytes::from(args))
+        .expect("build escrow lock");
+
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+    // Absolute-block-number since: top byte 0, value = block height.
+    let since_packed: Uint64 = since.pack();
+    let input = CellInput::new_builder()
+        .since(since_packed)
+        .previous_output(input_cell)
+        .build();
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![2u8])).pack()) // tag = 2 (refund)
+        .build();
+
+    let mut tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack());
+    for (id, cap) in outputs {
+        tb = tb
+            .output(
+                CellOutput::new_builder()
+                    .capacity(*cap)
+                    .lock(pinned_payout_lock(id))
+                    .build(),
+            )
+            .output_data(Bytes::new().pack());
+    }
+    let tx = ctx.complete_tx(tb.build());
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
+}
+
+#[test]
+fn accepts_happy_both_sign() {
+    let (p0, p1) = player_ids();
+    let (k0, k1) = signing_keys();
+    let args = build_args(&p0, &p1, &[0u8; 32], &[0u8; 32]);
+    // Both players agree player1 won; pay the full pot to p1 under the pinned lock.
+    let r = run_happy(args, 1, &k0, &k1, &[(p1.to_vec(), POT)]);
+    assert!(
+        r.is_ok(),
+        "happy spend with both valid sigs + correct payout must unlock, got {:?}",
+        r.err()
+    );
+}
+
+#[test]
+fn rejects_happy_single_sig() {
+    let (p0, p1) = player_ids();
+    let (k0, _k1) = signing_keys();
+    let wrong = wrong_key();
+    let args = build_args(&p0, &p1, &[0u8; 32], &[0u8; 32]);
+    // sig0 is player0's; sig1 is signed by a WRONG key → player1's sig invalid.
+    let r = run_happy(args, 1, &k0, &wrong, &[(p1.to_vec(), POT)]);
+    assert!(
+        r.is_err(),
+        "happy spend missing a valid player1 sig must reject (both must sign)"
+    );
+}
+
+#[test]
+fn accepts_happy_draw_split() {
+    let (p0, p1) = player_ids();
+    let (k0, k1) = signing_keys();
+    let args = build_args(&p0, &p1, &[0u8; 32], &[0u8; 32]);
+    // agreed_winner = 255 (draw): two outputs, 50/50 under the pinned lock.
+    let r = run_happy(
+        args,
+        255,
+        &k0,
+        &k1,
+        &[(p0.to_vec(), HALF), (p1.to_vec(), HALF)],
+    );
+    assert!(
+        r.is_ok(),
+        "happy draw with a 50/50 split must unlock, got {:?}",
+        r.err()
+    );
+}
+
+#[test]
+fn accepts_refund_after_deadline() {
+    let (p0, p1) = player_ids();
+    let deadline = 1000u64;
+    let args = build_args_deadline(&p0, &p1, &[0u8; 32], &[0u8; 32], deadline);
+    // since == deadline (absolute block) → opens the refund; 50/50 split.
+    let r = run_refund(args, deadline, &[(p0.to_vec(), HALF), (p1.to_vec(), HALF)]);
+    assert!(
+        r.is_ok(),
+        "refund at/after the deadline with a 50/50 split must unlock, got {:?}",
+        r.err()
+    );
+}
+
+#[test]
+fn rejects_refund_before_deadline() {
+    let (p0, p1) = player_ids();
+    let deadline = 1000u64;
+    let args = build_args_deadline(&p0, &p1, &[0u8; 32], &[0u8; 32], deadline);
+    // since == deadline-1 < deadline → refund must NOT open.
+    let r = run_refund(
+        args,
+        deadline - 1,
+        &[(p0.to_vec(), HALF), (p1.to_vec(), HALF)],
+    );
+    assert!(r.is_err(), "refund before the deadline must reject");
+}
+
 #[test]
 fn rejects_payout_to_winner_args_wrong_lock() {
     let (args, wit, _p0, p1, winner) = valid_setup();

@@ -59,9 +59,13 @@ mod contract {
     use blake2b_ref::Blake2bBuilder;
     use ckb_std::{
         ckb_constants::Source,
+        ckb_types::prelude::*,
         entry,
         error::SysError,
-        high_level::{load_cell_capacity, load_cell_lock, load_script, load_witness_args},
+        high_level::{
+            load_cell_capacity, load_cell_lock, load_input_out_point, load_input_since,
+            load_script, load_witness_args,
+        },
     };
     use core::alloc::{GlobalAlloc, Layout};
     use core::cell::UnsafeCell;
@@ -147,6 +151,18 @@ mod contract {
     const E_SYSCALL: i8 = 15; // M2: non-IndexOutOfBound syscall error (fail closed)
     const E_EQUAL_IDS: i8 = 16; // M3: player0_id == player1_id
 
+    // ---- Path 0 (happy / mutual-signed payout) ----
+    const E_HAPPY_WITNESS_SHORT: i8 = 17; // witness lock < tag(1)+winner(1)+sig0(65)+sig1(65)
+    const E_HAPPY_WINNER_CODE: i8 = 18; // agreed_winner not in {0, 1, 255}
+    const E_HAPPY_SIG0: i8 = 19; // sig0 invalid or not signed by player0
+    const E_HAPPY_SIG1: i8 = 20; // sig1 invalid or not signed by player1
+    const E_HAPPY_PAYOUT: i8 = 21; // output payout does not cover the agreed winner
+
+    // ---- Path 2 (refund / timeout split) ----
+    const E_SINCE_NOT_ABSOLUTE: i8 = 22; // GroupInput since is not an absolute-block lock
+    const E_BEFORE_DEADLINE: i8 = 23; // since < deadline_block
+    const E_REFUND_PAYOUT: i8 = 24; // refund outputs do not cover the 50/50 split
+
     const ID_LEN: usize = 20;
     const CODE_HASH_LEN: usize = 32;
     const HASH_TYPE_LEN: usize = 1;
@@ -231,6 +247,138 @@ mod contract {
         Ok(total)
     }
 
+    /// Recover the signer's blake160 from a `[v(1) ‖ r(32) ‖ s(32)]` recoverable
+    /// secp256k1 signature over the 32-byte prehash `msg`. Mirrors the court
+    /// path's inline recovery (bundled k256, `recover_from_prehash`, v∈{0,1}).
+    /// Returns `None` on any malformed-signature / recovery failure.
+    fn recover_blake160(msg: &[u8; 32], sig: &[u8]) -> Option<[u8; 20]> {
+        if sig.len() < 65 {
+            return None;
+        }
+        let recid = RecoveryId::from_byte(sig[0])?;
+        let signature = Signature::from_slice(&sig[1..65]).ok()?;
+        let vk = VerifyingKey::recover_from_prehash(msg, &signature, recid).ok()?;
+        let point = vk.to_encoded_point(true); // 33-byte compressed
+        Some(blake160(point.as_bytes()))
+    }
+
+    /// Path 0 — HAPPY (mutual-signed payout). Witness lock layout:
+    /// `tag=0(1) ‖ agreed_winner(1) ‖ sig0(65) ‖ sig1(65)`.
+    ///
+    /// BOTH players must sign `blake2b(escrow_input_outpoint ‖ agreed_winner)` —
+    /// binding the signed payout to THIS escrow cell's own OutPoint defeats
+    /// replaying a signed agreement against a different escrow. Payout is bound
+    /// under the pinned payout lock (`paid_to`), never by args alone.
+    fn happy_path(lock: &[u8], p0: &[u8], p1: &[u8], pch: &[u8], pht: u8) -> i8 {
+        const NEED: usize = 1 + 1 + 65 + 65; // tag ‖ winner ‖ sig0 ‖ sig1
+        if lock.len() < NEED {
+            return E_HAPPY_WITNESS_SHORT;
+        }
+        let agreed_winner = lock[1];
+        if agreed_winner != 0 && agreed_winner != 1 && agreed_winner != 255 {
+            return E_HAPPY_WINNER_CODE;
+        }
+        let sig0 = &lock[2..67];
+        let sig1 = &lock[67..132];
+
+        // message = blake2b(escrow_input_outpoint ‖ agreed_winner). The GroupInput
+        // OutPoint is the spent escrow cell's own outpoint (36 molecule bytes).
+        let outpoint = match load_input_out_point(0, Source::GroupInput) {
+            Ok(o) => o,
+            Err(_) => return E_SYSCALL,
+        };
+        let mut h = Blake2bBuilder::new(32)
+            .personal(b"ckb-default-hash")
+            .build();
+        h.update(outpoint.as_slice());
+        h.update(&[agreed_winner]);
+        let mut msg = [0u8; 32];
+        h.finalize(&mut msg);
+
+        // BOTH sigs must verify — a single valid sig must not unlock.
+        let id0 = match recover_blake160(&msg, sig0) {
+            Some(id) => id,
+            None => return E_HAPPY_SIG0,
+        };
+        if id0 != p0 {
+            return E_HAPPY_SIG0;
+        }
+        let id1 = match recover_blake160(&msg, sig1) {
+            Some(id) => id,
+            None => return E_HAPPY_SIG1,
+        };
+        if id1 != p1 {
+            return E_HAPPY_SIG1;
+        }
+
+        let pot = match pot_capacity() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let to0 = match paid_to(p0, pch, pht) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let to1 = match paid_to(p1, pch, pht) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let ok = match agreed_winner {
+            0 => to0 >= pot,
+            1 => to1 >= pot,
+            255 => {
+                let half = pot / 2;
+                to0 >= half && to1 >= half
+            }
+            _ => false,
+        };
+        if ok {
+            0
+        } else {
+            E_HAPPY_PAYOUT
+        }
+    }
+
+    /// Path 2 — REFUND (timeout). Witness lock is just `tag=2(1)`.
+    ///
+    /// Valid ONLY if the GroupInput's `since` is an ABSOLUTE BLOCK NUMBER lock
+    /// (CKB `since` top byte == 0x00: relative flag 0, metric flag block, no
+    /// reserved bits) whose value ≥ `deadline_block`. Splits the pot 50/50 back
+    /// to both players under the pinned payout lock.
+    fn refund_path(p0: &[u8], p1: &[u8], pch: &[u8], pht: u8, deadline_block: u64) -> i8 {
+        let since = match load_input_since(0, Source::GroupInput) {
+            Ok(s) => s,
+            Err(_) => return E_SYSCALL,
+        };
+        // Absolute-block-number since: the high (flag) byte must be entirely zero.
+        // Any relative/epoch/timestamp lock (or reserved bits) is rejected so a
+        // non-block `since` can never satisfy the block-number deadline.
+        if (since >> 56) != 0 {
+            return E_SINCE_NOT_ABSOLUTE;
+        }
+        if since < deadline_block {
+            return E_BEFORE_DEADLINE;
+        }
+        let pot = match pot_capacity() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let to0 = match paid_to(p0, pch, pht) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let to1 = match paid_to(p1, pch, pht) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        let half = pot / 2;
+        if to0 >= half && to1 >= half {
+            0
+        } else {
+            E_REFUND_PAYOUT
+        }
+    }
+
     fn program_entry() -> i8 {
         // SAFETY: single-threaded; HEAP initialised once before any allocation.
         unsafe {
@@ -276,8 +424,24 @@ mod contract {
             return E_COURT_WITNESS_SHORT;
         }
         let tag = lock[0];
+        if tag == 0 {
+            // Path 0 — HAPPY (mutual-signed payout, no replay).
+            return happy_path(&lock, player0_id, player1_id, payout_code_hash, payout_hash_type);
+        }
+        if tag == 2 {
+            // Path 2 — REFUND (timeout split). deadline = args[137..145] LE u64.
+            let mut d = [0u8; 8];
+            d.copy_from_slice(&args[137..145]);
+            let deadline_block = u64::from_le_bytes(d);
+            return refund_path(
+                player0_id,
+                player1_id,
+                payout_code_hash,
+                payout_hash_type,
+                deadline_block,
+            );
+        }
         if tag != 1 {
-            // Paths 0 (happy) / 2 (refund) are implemented by Task 5.
             return E_UNSUPPORTED_TAG;
         }
         // Court: tag(1) ‖ nonce0(32) ‖ nonce1(32) ‖ envelope.
