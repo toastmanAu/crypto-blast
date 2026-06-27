@@ -596,7 +596,7 @@ git commit -m "feat(verifier): port step_world + turn-loop/physics/detonation he
 **Interfaces:**
 - Consumes: `create_world`, `step_world`, `serialize_world`, `ckbhash`, `TickInput`.
 
-**Source:** `src/sim/demoMatch.ts` (`demoInputs`, `turnLoopInputs`, `selectThenFireInputs`). These tapes FIRE shots and end turns — so this byte-proves `step_world`, `advanceShot`, `detonate`, `applyBlast`, `rerollTurn`, AND the non-null `shot`/`winner` serialize branches (the Phase 0 carry-forward).
+**Source:** `src/sim/demoMatch.ts` (`demoInputs`, `turnLoopInputs`, `selectThenFireInputs`). These tapes FIRE shots and end turns — so this byte-proves `step_world`, `advanceShot`, `detonate`, `applyBlast`, `rerollTurn`. CORRECTION (final review): the commitment is compared only at the FINAL tick, where all three tapes have `shot=None` and no team eliminated — so the non-null `shot` serialize branch and the `winner!=null` (GAMEOVER) branch are NOT byte-proven by these tapes; they are correct-by-inspection (verified in Task 8 + final review) but lack test coverage. CARRY-FORWARD to Phase 2: add a directed test (a tape ending mid-flight + a forced GAMEOVER state, or a unit test serializing a `shot=Some`/`winner=Some` world in both TS and Rust).
 
 - [ ] **Step 1: Export tapes + final commitments** — add to `scripts/export-fixture.ts`:
 
@@ -717,7 +717,7 @@ git commit -m "bench(verifier): full-match CKB-VM cycle count; document commitme
 
 ## Self-Review
 
-- **Spec coverage:** Terrain `Math.sin` blocker → Task 1 (chosen approach: full-range deterministic sine). Port rng → T2; trig → T3; terrain → T4; aim+weapons → T5; physics → T6; create_world → T7; step_world → T8; tape conformance (byte-proves shot/winner branches, the Phase 0 carry-forward) → T9; full-match cycle gate + memory discipline → T10. All roadmap Phase 1 items covered.
+- **Spec coverage:** Terrain `Math.sin` blocker → Task 1 (chosen approach: full-range deterministic sine). Port rng → T2; trig → T3; terrain → T4; aim+weapons → T5; physics → T6; create_world → T7; step_world → T8; tape conformance (byte-proves step_world/physics/turn-loop via final-commit; shot-present + winner!=null serialize branches remain correct-by-inspection, see Task 9 correction → Phase 2) → T9; full-match cycle gate + memory discipline → T10. All roadmap Phase 1 items covered.
 - **Placeholder scan:** Conformance tests carry complete code + real fixtures. Port-implementation steps name the exact TS source + hazards per the stated port calibration (the TS is the authoritative code, not a placeholder). Golden/cycle values are captured at execution and recorded (Task 1 regenerates; Task 10 measures) — flagged, not faked.
 - **Type consistency:** `next_random(i32)->(f64,i32)`, `dsin/dcos/dsin_full(f64)->f64`, `generate_terrain_mask(i32,i32,i32)->TerrainMask`, `step_projectile(&ProjectileState,&ProjectileParams,f64,f64)->ProjectileState`, `create_world(i32,i32,i32)->WorldState`, `step_world(&mut WorldState,&TickInput)` are used consistently across tasks. `serialize_world`/`ckbhash`/`quantize` reused from Phase 0. `TickInput` field names (`aim_up`… `select_weapon: Option<i32>`) consistent T8↔T9.
 - **Hazards** (next_random `next=a`, Math.imul, f32 heightmap, range-reduced sine, semi-implicit Euler, exact-zero snaps, non-exact literals) are documented once up front and referenced per task.
