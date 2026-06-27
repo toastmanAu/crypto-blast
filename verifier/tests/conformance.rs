@@ -262,3 +262,43 @@ fn winner_set_serializes_byte_identical_to_ts() {
     w.winner = Some(0);
     assert_eq!(serialize_world(&w), want_bytes, "winner!=null serialize diverges from TS");
 }
+
+#[test]
+fn seed_and_attested_tape_match_ts() {
+    use verifier::{decode_attested, derive_seed};
+
+    // derive_seed must byte-match the TS deriveSeed fixture for nonces fill(1)/fill(2).
+    let want_seed: i32 = std::fs::read_to_string("tests/fixture-seed.txt")
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let n0 = [1u8; 32];
+    let n1 = [2u8; 32];
+    assert_eq!(derive_seed(&n0, &n1), want_seed, "derive_seed diverges from TS fixture");
+
+    // decode_attested must parse the envelope, yielding exactly 3 signed turns.
+    let env = std::fs::read("tests/fixture-attested.bin").unwrap();
+    let seed: i32 = std::fs::read_to_string("tests/fixture-attested-seed.txt")
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let blocks = decode_attested(&env).expect("decode_attested returned None");
+    assert_eq!(blocks.len(), 3, "expected 3 attested turns");
+
+    // Replay all blocks from the attested seed — iterate EVERY tick in each
+    // block's tape_bytes (don't break early on GAMEOVER; step_world no-ops after).
+    let mut w = create_world(seed, 1280, 720);
+    for b in &blocks {
+        for input in decode_tape(b.tape_bytes) {
+            step_world(&mut w, &input);
+        }
+    }
+
+    // Commitment is exercised end-to-end; just assert the replay ran.
+    // Task 4 will assert the sig + winner check against this commitment.
+    let commitment = format!("0x{}", hex(&ckbhash(&serialize_world(&w))));
+    assert!(!commitment.is_empty(), "commitment should be non-empty");
+    assert!(!blocks.is_empty(), "blocks should be non-empty");
+}

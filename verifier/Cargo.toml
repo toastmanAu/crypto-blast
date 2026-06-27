@@ -22,8 +22,9 @@ serde_json = { version = "1", optional = true }
 # sim's f64 maths stays bit-identical without std's libm. Always compiled
 # (tiny); referenced only inside `#[cfg(not(feature = "std"))]` code.
 libm = { version = "0.2", default-features = false }
+# Pure-Rust no_std blake2b used by attest.rs (derive_seed / attest_message /
+# decode_attested).  Also available to the bench crate and the on-chain
+# contract via the same version pin.
+blake2b-ref = { version = "0.3", default-features = false }
 
 [dev-dependencies]
-# no_std blake2b used by the on-chain verifier path (bench crate + CKB-VM).
-# Pinned here so the host conformance test can assert it reproduces the golden.
-blake2b-ref = { version = "0.3", default-features = false }
