@@ -323,7 +323,7 @@ git add docs/ESCROW.md docs/COMMITMENT.md docs/superpowers/plans/2026-06-27-phas
 git commit -m "docs(phase4): escrow-lock protocol + Phase 4A result"
 ```
 
-> **Phase 4A result (fill in at completion):** ckb-testtool — court accept/reject-forged/reject-seed/reject-loser-payout = ___; happy accept/reject-single = ___; refund accept-after/reject-before = ___. Court-path cycles = ___. escrow-lock binary = ___ KB.
+> **Phase 4A result:** ckb-testtool — court (accepts_court_valid/rejects_forged_move/rejects_wrong_seed/rejects_payout_to_loser/rejects_payout_to_winner_args_wrong_lock) = PASS/PASS/PASS/PASS/PASS; happy (accepts_happy_both_sign/accepts_happy_draw_split/rejects_happy_single_sig) = PASS/PASS/PASS; refund (accepts_refund_after_deadline/rejects_refund_before_deadline) = PASS/PASS. Total: 10/10 escrow + 3/3 verify. Court-path cycles = 277,676,630 (~278M, 23-turn fixture). escrow-lock binary = 348,288 bytes (~340 KB). secp = bundled k256 (no dynamic-loading). Testnet broadcast = manual Plan-B step, not yet performed.
 
 ---
 

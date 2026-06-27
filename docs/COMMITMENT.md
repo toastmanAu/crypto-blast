@@ -163,6 +163,25 @@ reduce the blake2b cost that currently dominates the cycle count).
 
 ---
 
+## 8. Escrow-lock (Phase 4A)
+
+Phase 4A adds a 2-player match-settlement escrow-lock that holds both players'
+stakes and pays the real winner via one of three spend paths. See
+[`docs/ESCROW.md`](ESCROW.md) for the full protocol specification including:
+the 145-byte `lock.args` layout, the 3 spend paths (happy/court/refund) with
+their witness formats, the attestation envelope, the seed commit-reveal, the
+prize-theft fix (code_hash + hash_type pinning), the ckb-testtool gate (10/10),
+and the builder requirements (separate fee input, canonical payout lock pin).
+
+**Phase 4A metrics (as-built):**
+- escrow-lock binary: 348,288 bytes (~340 KB, `riscv64imac-unknown-none-elf` release)
+- Court-path cycles: 277,676,630 (~278M) for a 23-turn fixture
+- ckb-testtool: 10/10 escrow + 3/3 verify tests PASS
+- secp: bundled k256 (no dynamic-loading; no `secp256k1_data` dep cell required)
+- Testnet broadcast: manual Plan-B step (not yet performed)
+
+---
+
 ## 7. On-chain verification (lock script)
 
 Phase 2 delivers a CKB **lock script** that is the on-chain verifier kernel
