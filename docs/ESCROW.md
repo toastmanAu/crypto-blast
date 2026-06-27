@@ -68,7 +68,7 @@ first `GroupInput`. Binding the cell's own OutPoint prevents a signed agreement
 from being replayed against a different escrow cell.
 
 **Verification:** both `sig0` and `sig1` must recover to `player0_id` and
-`player1_id` respectively (codes `E_HAPPY_SIG0=19`, `E_HAPPY_SIG1=21`). A single
+`player1_id` respectively (codes `E_HAPPY_SIG0=19`, `E_HAPPY_SIG1=20`). A single
 valid signature is insufficient.
 
 **Payout (pinned lock):**
@@ -263,7 +263,7 @@ is wrong and the court/happy/refund paths will all reject valid spends.
 | Court-path cycles (23-turn fixture, 23 secp recoveries, ckb-testtool) | **277,676,630 (~278M)** |
 | Happy-path cycles | not measured (2 secp recoveries; much lower than court) |
 | Refund-path cycles | not measured (no secp; very low) |
-| CKB block cycle budget ceiling | 200,000,000 (~3.7× headroom for happy/refund; court ~1.4× under 500M test limit) |
+| Cycle limits | happy/refund well under the 200M mainnet per-tx limit; **court ~278M EXCEEDS 200M mainnet** (accepted under the 500M ckb-testtool ceiling) — see dynamic-loading optimization below |
 | secp implementation | k256 0.13 bundled (no_std, no precomputed tables) |
 | Court fixture turns | 23 (synthetic self-destruct match, seed=1234, winner=player1) |
 
