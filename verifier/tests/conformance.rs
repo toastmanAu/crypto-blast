@@ -1,3 +1,4 @@
+use std::fs;
 use verifier::ckbhash;
 use verifier::quantize;
 
@@ -24,4 +25,12 @@ fn quantize_matches_js_math_round() {
     assert_eq!(quantize(-0.0025), -2);        // JS Math.round(-2.5) = -2, NOT -3
     assert_eq!(quantize(0.0025), 3);          // 0.0025*1000 = 2.5, floor(3.0) = 3
     assert_eq!(quantize(-1.5), -1500);
+}
+
+#[test]
+fn commit_over_exported_bytes_matches_golden() {
+    let bytes = fs::read("tests/fixture-initial.bin").expect("run scripts/export-fixture.ts");
+    let want = fs::read_to_string("tests/fixture-initial.hash").unwrap();
+    let want = want.trim().trim_start_matches("0x");
+    assert_eq!(hex(&ckbhash(&bytes)), want);
 }
