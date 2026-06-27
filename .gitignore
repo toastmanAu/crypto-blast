@@ -30,3 +30,6 @@ npm-debug.log*
 
 # subagent-driven-development scratch (orchestration logs, not source)
 .superpowers/
+
+# Rust build output (verifier crate / rust-analyzer)
+/target
