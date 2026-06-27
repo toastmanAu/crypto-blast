@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 pub const ELEVATION_MIN: f64 = 0.0;
@@ -7,11 +8,16 @@ pub const ANGLE_SPEED: f64 = 1.6; // rad/s
 
 /// Plain serializable aim state. Ported from src/core/aim.ts.
 /// Facing: -1 = left, +1 = right. Elevation: [0, PI/2] above the horizon.
-#[derive(Debug, Clone)]
+///
+/// `Deserialize` lets this single type back the fixture-JSON loader path too
+/// (`facing` is `-1`/`1`, which fits i32); `serialize_world` casts `facing` to
+/// u32 (two's complement) on the way out.
+#[derive(Debug, Clone, Deserialize)]
 pub struct AimState {
     pub facing: i32,
     pub elevation: f64,
     pub power: f64,
+    #[serde(rename = "isCharging")]
     pub is_charging: bool,
 }
 

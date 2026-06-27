@@ -7,10 +7,22 @@
 //! semantics) and u32s use two's-complement reinterpret (JS `n >>> 0`) so that
 //! `-1` encodes as `0xFFFFFFFF` and `winner == null` encodes as `99`.
 
+use crate::aim::{create_aim, AimState};
 use crate::physics::ProjectileState;
-use crate::quantize;
+use crate::terrain::generate_terrain_mask;
+use crate::weapons::{weapon_at, WEAPON_COUNT};
+use crate::{column_surface, quantize};
 use serde::Deserialize;
 use std::fs;
+
+// --- createWorld constants, ported from src/sim/World.ts ---
+const APES_PER_TEAM: usize = 3;
+const APE_MAX_HEALTH: f64 = 100.0;
+const APE_HEIGHT: f64 = 36.0;
+const MAX_WIND: f64 = 220.0;
+const TURN_TICKS: i64 = 1500;
+const SPAWN_MARGIN: f64 = 0.10;
+const SPAWN_SPAN: f64 = 0.28;
 
 /// Phase strings in the canonical order; the index is what gets serialized.
 /// Mirrors `PHASE_ORDER` / `indexOf` in `serialize.ts` (missing -> -1).
@@ -22,19 +34,6 @@ fn phase_index(phase: &str) -> i64 {
         .position(|p| *p == phase)
         .map(|i| i as i64)
         .unwrap_or(-1)
-}
-
-/// Aim/power state for world-state deserialization. Mirrors `AimState` in
-/// `src/core/aim.ts`. `facing` is `-1` or `+1`, so it MUST be signed (it is
-/// u32-encoded as two's complement: `-1` -> `0xFFFFFFFF`).
-/// Named `AimSnapshot` here to avoid collision with `aim::AimState`.
-#[derive(Debug, Deserialize)]
-pub struct AimSnapshot {
-    pub facing: i64,
-    pub elevation: f64,
-    pub power: f64,
-    #[serde(rename = "isCharging")]
-    pub is_charging: bool,
 }
 
 /// One ape. Mirrors the serialized subset of `ApeState` in `src/sim/World.ts`
@@ -82,7 +81,8 @@ pub struct WorldState {
     pub team_next: [i64; 2],
     pub wind: f64,
     pub apes: Vec<ApeState>,
-    pub aim: AimSnapshot,
+    /// Unified game-logic + serde aim type (see [`crate::aim::AimState`]).
+    pub aim: AimState,
     #[serde(rename = "selectedWeapon")]
     pub selected_weapon: i64,
     /// `ammo[team][weaponIndex]`; `-1` means unlimited (u32-encoded as
@@ -148,7 +148,7 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.f(ape.vel_y);
     }
 
-    w.u32(world.aim.facing);
+    w.u32(world.aim.facing as i64);
     w.f(world.aim.elevation);
     w.f(world.aim.power);
     w.u32(if world.aim.is_charging { 1 } else { 0 });
@@ -171,6 +171,68 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
 
     w.bytes(&world.mask);
     w.buf
+}
+
+/// Build the initial world natively from a seed — a byte-exact port of
+/// `createWorld` in `src/sim/World.ts`. Generates the terrain, spawns both teams,
+/// rolls the opening wind, and seeds aim/ammo. Proves full initial-state parity:
+/// `serialize_world(create_world(...))` reproduces the TS commitment from the
+/// seed alone (no fixture JSON).
+pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
+    let mask = generate_terrain_mask(width, height, seed);
+
+    // Teams spawn on opposing sides: team 0 left, team 1 mirrored right.
+    // Index order is contiguous per team (team 0 first).
+    let mut apes: Vec<ApeState> = Vec::with_capacity(2 * APES_PER_TEAM);
+    for team in 0..2i64 {
+        for j in 0..APES_PER_TEAM {
+            // TS: t = j / Math.max(1, APES_PER_TEAM - 1)
+            let t = j as f64 / ((APES_PER_TEAM as i64 - 1).max(1)) as f64;
+            let from_edge = SPAWN_MARGIN + SPAWN_SPAN * t;
+            let frac = if team == 0 {
+                from_edge
+            } else {
+                1.0 - from_edge
+            };
+            let x = (width as f64 * frac).floor();
+            let surface_y = column_surface(&mask, x).unwrap_or(height - 50);
+            let y = surface_y as f64 - APE_HEIGHT / 2.0;
+            apes.push(ApeState {
+                team,
+                health: APE_MAX_HEALTH,
+                x,
+                y,
+                vel_x: 0.0,
+                vel_y: 0.0,
+            });
+        }
+    }
+
+    // Wind roll. TS: nextRandom(seed >>> 0). `seed >>> 0` reinterprets the i32
+    // seed bits as u32; next_random takes i32 and wraps identically, so passing
+    // `seed` straight through is bit-identical to the TS cursor.
+    let (value, next) = crate::next_random(seed);
+    let start_ammo: Vec<i64> = (0..WEAPON_COUNT)
+        .map(|i| weapon_at(i).ammo_start as i64)
+        .collect();
+
+    WorldState {
+        tick: 0,
+        rng: next as i64,
+        phase: "AIMING".to_string(),
+        active_ape: 0,
+        turn_timer: TURN_TICKS,
+        resolve_timer: 0,
+        winner: None,
+        team_next: [1, 0],
+        wind: (value * 2.0 - 1.0) * MAX_WIND,
+        apes,
+        aim: create_aim(1), // team 0 starts on the left, facing right
+        selected_weapon: 0,
+        ammo: vec![start_ammo.clone(), start_ammo],
+        shot: None,
+        mask: mask.data,
+    }
 }
 
 /// Load a fixture world: deserialize the struct (minus mask) from

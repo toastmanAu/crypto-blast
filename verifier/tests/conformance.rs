@@ -4,9 +4,9 @@ use verifier::ckbhash;
 use verifier::generate_terrain_mask;
 use verifier::next_random;
 use verifier::quantize;
+use verifier::{create_world, load_fixture_world, serialize_world};
 use verifier::{dcos, dsin, dsin_full};
-use verifier::{load_fixture_world, serialize_world};
-use verifier::{step_projectile, ProjectileState, Vec2, weapon_at};
+use verifier::{step_projectile, weapon_at, ProjectileState, Vec2};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
@@ -79,7 +79,10 @@ fn blake2b_ref_matches_golden_and_ckbhash() {
     let ref_hex = hex(&out);
 
     // Pin no_std path to the golden commitment file.
-    assert_eq!(ref_hex, golden, "blake2b-ref diverges from fixture-initial.hash");
+    assert_eq!(
+        ref_hex, golden,
+        "blake2b-ref diverges from fixture-initial.hash"
+    );
 
     // Pin no_std path to the std blake2b-rs path so both are locked to each other.
     assert_eq!(
@@ -143,10 +146,35 @@ fn weapons_and_aim_basics() {
 fn step_projectile_matches_ts_bitexact() {
     let txt = std::fs::read_to_string("tests/fixture-projectile.txt").unwrap();
     let params = weapon_at(1).projectile;
-    let mut st = ProjectileState { pos: Vec2 { x: 100.0, y: 100.0 }, vel: Vec2 { x: 200.0, y: -300.0 } };
+    let mut st = ProjectileState {
+        pos: Vec2 { x: 100.0, y: 100.0 },
+        vel: Vec2 {
+            x: 200.0,
+            y: -300.0,
+        },
+    };
     for (i, line) in txt.lines().enumerate() {
         st = step_projectile(&st, &params, 50.0, 1.0 / 50.0 / 4.0);
         let p: Vec<f64> = line.split('|').map(|s| s.parse().unwrap()).collect();
-        assert_eq!((st.pos.x, st.pos.y, st.vel.x, st.vel.y), (p[0], p[1], p[2], p[3]), "step {i}");
+        assert_eq!(
+            (st.pos.x, st.pos.y, st.vel.x, st.vel.y),
+            (p[0], p[1], p[2], p[3]),
+            "step {i}"
+        );
     }
+}
+
+#[test]
+fn create_world_serializes_to_ts_fixture() {
+    // Native create_world (incl. native terrain) must serialize to the SAME bytes
+    // TS produced — proves full initial-state parity end-to-end.
+    let want_bytes = std::fs::read("tests/fixture-initial.bin").unwrap();
+    let want_hash = std::fs::read_to_string("tests/fixture-initial.hash").unwrap();
+    let w = create_world(1234, 1280, 720);
+    let bytes = serialize_world(&w);
+    assert_eq!(
+        bytes, want_bytes,
+        "create_world serialization diverges from TS"
+    );
+    assert_eq!(format!("0x{}", hex(&ckbhash(&bytes))), want_hash.trim());
 }
