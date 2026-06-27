@@ -113,3 +113,27 @@ fn trig_matches_ts_bitexact() {
         assert_eq!(dsin_full(x), p[1].parse::<f64>().unwrap(), "dsin_full({x})");
     }
 }
+
+#[test]
+fn weapons_and_aim_basics() {
+    use verifier::{aim_angle, create_aim, update_charge, weapon_at};
+
+    // weapon table spot-checks (id index, launch speed, ammo, wind susceptibility)
+    let w0 = weapon_at(0);
+    assert_eq!(w0.launch_speed, 760.0);
+    assert_eq!(w0.ammo_start, -1);
+    let w1 = weapon_at(1);
+    assert_eq!(w1.projectile.wind_susceptibility, 1.0_f64 / 3.0);
+    let w3 = weapon_at(3);
+    assert_eq!(w3.projectile.wind_susceptibility, 1.0_f64 / 6.0);
+
+    // aim: facing-right launch angle == elevation (45° default)
+    let a = create_aim(1);
+    assert_eq!(aim_angle(&a), std::f64::consts::FRAC_PI_4);
+    // charge accrues power = dt / CHARGE_SECONDS per tick
+    let mut a2 = create_aim(1);
+    a2.is_charging = true;
+    a2.power = 0.0;
+    update_charge(&mut a2, 1.0 / 50.0);
+    assert_eq!(a2.power, (1.0 / 50.0) / 1.2);
+}

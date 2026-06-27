@@ -23,11 +23,12 @@ fn phase_index(phase: &str) -> i64 {
         .unwrap_or(-1)
 }
 
-/// Aim/power state. Mirrors `AimState` in `src/core/aim.ts`.
-/// `facing` is `-1` or `+1`, so it MUST be signed (it is u32-encoded as two's
-/// complement: `-1` -> `0xFFFFFFFF`).
+/// Aim/power state for world-state deserialization. Mirrors `AimState` in
+/// `src/core/aim.ts`. `facing` is `-1` or `+1`, so it MUST be signed (it is
+/// u32-encoded as two's complement: `-1` -> `0xFFFFFFFF`).
+/// Named `AimSnapshot` here to avoid collision with `aim::AimState`.
 #[derive(Debug, Deserialize)]
-pub struct AimState {
+pub struct AimSnapshot {
     pub facing: i64,
     pub elevation: f64,
     pub power: f64,
@@ -94,7 +95,7 @@ pub struct WorldState {
     pub team_next: [i64; 2],
     pub wind: f64,
     pub apes: Vec<ApeState>,
-    pub aim: AimState,
+    pub aim: AimSnapshot,
     #[serde(rename = "selectedWeapon")]
     pub selected_weapon: i64,
     /// `ammo[team][weaponIndex]`; `-1` means unlimited (u32-encoded as
