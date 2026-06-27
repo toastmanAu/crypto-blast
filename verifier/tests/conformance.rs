@@ -1,6 +1,7 @@
 use blake2b_ref::Blake2bBuilder;
 use std::fs;
 use verifier::ckbhash;
+use verifier::next_random;
 use verifier::quantize;
 use verifier::{load_fixture_world, serialize_world};
 
@@ -42,6 +43,20 @@ fn commit_over_exported_bytes_matches_golden() {
     let want = fs::read_to_string("tests/fixture-initial.hash").unwrap();
     let want = want.trim().trim_start_matches("0x");
     assert_eq!(hex(&ckbhash(&bytes)), want);
+}
+
+#[test]
+fn next_random_matches_ts_vectors() {
+    let txt = std::fs::read_to_string("tests/fixture-rng.txt").expect("run export-fixture.ts");
+    for line in txt.lines() {
+        let parts: Vec<&str> = line.split('|').collect();
+        let state: i32 = parts[0].parse::<i64>().unwrap() as i32;
+        let want_value: f64 = parts[1].parse().unwrap();
+        let want_next: i32 = parts[2].parse::<i64>().unwrap() as i32;
+        let (value, next) = next_random(state);
+        assert_eq!(value, want_value, "value mismatch for state {state}");
+        assert_eq!(next, want_next, "next mismatch for state {state}");
+    }
 }
 
 #[test]

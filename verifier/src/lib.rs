@@ -1,3 +1,6 @@
+mod rng;
+pub use rng::*;
+
 mod world;
 pub use world::*;
 

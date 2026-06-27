@@ -3,6 +3,7 @@
 import { writeFileSync } from 'node:fs';
 import { createWorld, commitWorld } from '../src/sim/World';
 import { serializeWorld, toHex } from '../src/sim/serialize';
+import { nextRandom } from '../src/core/rng';
 
 const w = createWorld(1234, 1280, 720);
 writeFileSync('verifier/tests/fixture-initial.bin', Buffer.from(serializeWorld(w)));
@@ -15,3 +16,11 @@ writeFileSync('verifier/tests/fixture-initial.json', JSON.stringify(rest));
 writeFileSync('verifier/tests/fixture-mask.bin', Buffer.from(mask.data));
 
 console.log('exported initial fixture:', toHex(commitWorld(w)));
+
+// RNG conformance vectors: 12 steps from seed 1234.
+{
+  let cur = 1234 >>> 0; const rows: string[] = [];
+  for (let i = 0; i < 12; i++) { const r = nextRandom(cur); rows.push(`${cur}|${r.value}|${r.next}`); cur = r.next; }
+  writeFileSync('verifier/tests/fixture-rng.txt', rows.join('\n'));
+}
+console.log('exported rng vectors');
