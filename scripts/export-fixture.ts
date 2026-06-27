@@ -36,3 +36,14 @@ import { dsin, dcos, dsinFull } from '../src/core/trig';
   writeFileSync('verifier/tests/fixture-trig-full.txt', full.join('\n'));
 }
 console.log('exported trig vectors');
+
+// Projectile conformance vectors: 20 steps with weapon 1 (gasGrenade), wind=50, dt=1/50/4.
+import { stepProjectile } from '../src/physics/ProjectilePhysics';
+import { weaponAt } from '../src/weapons/weaponData';
+{
+  let st = { pos: { x: 100, y: 100 }, vel: { x: 200, y: -300 } };
+  const params = weaponAt(1).projectile; const rows: string[] = [];
+  for (let i = 0; i < 20; i++) { st = stepProjectile(st, params, 50, 1/50/4); rows.push(`${st.pos.x}|${st.pos.y}|${st.vel.x}|${st.vel.y}`); }
+  writeFileSync('verifier/tests/fixture-projectile.txt', rows.join('\n'));
+}
+console.log('exported projectile vectors');

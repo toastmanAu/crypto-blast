@@ -4,9 +4,6 @@ pub use rng::*;
 mod trig;
 pub use trig::*;
 
-mod world;
-pub use world::*;
-
 mod terrain;
 pub use terrain::*;
 
@@ -15,6 +12,12 @@ pub use aim::*;
 
 mod weapons;
 pub use weapons::*;
+
+mod physics;
+pub use physics::*;
+
+mod world;
+pub use world::*;
 
 use blake2b_rs::Blake2bBuilder;
 

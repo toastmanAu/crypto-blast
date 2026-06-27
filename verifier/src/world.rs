@@ -7,6 +7,7 @@
 //! semantics) and u32s use two's-complement reinterpret (JS `n >>> 0`) so that
 //! `-1` encodes as `0xFFFFFFFF` and `winner == null` encodes as `99`.
 
+use crate::physics::ProjectileState;
 use crate::quantize;
 use serde::Deserialize;
 use std::fs;
@@ -49,20 +50,6 @@ pub struct ApeState {
     pub vel_x: f64,
     #[serde(rename = "velY")]
     pub vel_y: f64,
-}
-
-/// 2D vector. Mirrors `Vec2` in `src/physics/ProjectilePhysics.ts`.
-#[derive(Debug, Deserialize)]
-pub struct Vec2 {
-    pub x: f64,
-    pub y: f64,
-}
-
-/// Projectile kinematics. Mirrors `ProjectileState`.
-#[derive(Debug, Deserialize)]
-pub struct ProjectileState {
-    pub pos: Vec2,
-    pub vel: Vec2,
 }
 
 /// In-flight shot. Mirrors the serialized subset of `ShotState` (`prevPos` is

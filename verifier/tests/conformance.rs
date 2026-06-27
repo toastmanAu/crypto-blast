@@ -6,6 +6,7 @@ use verifier::next_random;
 use verifier::quantize;
 use verifier::{dcos, dsin, dsin_full};
 use verifier::{load_fixture_world, serialize_world};
+use verifier::{step_projectile, ProjectileState, Vec2, weapon_at};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
@@ -136,4 +137,16 @@ fn weapons_and_aim_basics() {
     a2.power = 0.0;
     update_charge(&mut a2, 1.0 / 50.0);
     assert_eq!(a2.power, (1.0 / 50.0) / 1.2);
+}
+
+#[test]
+fn step_projectile_matches_ts_bitexact() {
+    let txt = std::fs::read_to_string("tests/fixture-projectile.txt").unwrap();
+    let params = weapon_at(1).projectile;
+    let mut st = ProjectileState { pos: Vec2 { x: 100.0, y: 100.0 }, vel: Vec2 { x: 200.0, y: -300.0 } };
+    for (i, line) in txt.lines().enumerate() {
+        st = step_projectile(&st, &params, 50.0, 1.0 / 50.0 / 4.0);
+        let p: Vec<f64> = line.split('|').map(|s| s.parse().unwrap()).collect();
+        assert_eq!((st.pos.x, st.pos.y, st.vel.x, st.vel.y), (p[0], p[1], p[2], p[3]), "step {i}");
+    }
 }
