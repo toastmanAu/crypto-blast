@@ -15,7 +15,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
 import { replay } from '../src/sim/tape';
 import type { GameTape } from '../src/sim/tape';
-import { hashWorld } from '../src/sim/World';
+import { commitWorld } from '../src/sim/World';
+import { toHex } from '../src/sim/serialize';
 import type { WorldState, TickInput } from '../src/sim/World';
 import { demoTape } from '../src/sim/demoMatch';
 
@@ -74,8 +75,10 @@ function loadTape(path: string): GameTape {
   return t as unknown as GameTape;
 }
 
-function hex(hash: number): string {
-  return '0x' + (hash >>> 0).toString(16).padStart(8, '0');
+/** Normalize a commitment hex claim for comparison: lowercase, 0x-prefixed. */
+function normHex(s: string): string {
+  const body = (s.startsWith('0x') ? s.slice(2) : s).toLowerCase();
+  return '0x' + body;
 }
 
 function summarize(tape: GameTape, world: WorldState): void {
@@ -91,7 +94,7 @@ function summarize(tape: GameTape, world: WorldState): void {
     `wind        ${world.wind.toFixed(1)}`,
     `shot        ${world.shot ? 'in flight' : 'none'}`,
     `terrain     ${solid} solid px`,
-    `state hash  ${hex(hashWorld(world))}`,
+    `commitment  ${toHex(commitWorld(world))}`,
   ];
   console.log(lines.join('\n'));
 }
@@ -109,12 +112,12 @@ function main(): void {
   summarize(tape, world);
 
   if (args.expect !== null) {
-    const actual = hashWorld(world) >>> 0;
-    const expected = Number(args.expect) >>> 0; // accepts 0x.. or decimal
+    const actual = toHex(commitWorld(world));
+    const expected = normHex(args.expect); // accepts 0x-prefixed or bare hex
     if (actual === expected) {
-      console.log(`VERIFIED  ${hex(actual)} matches --expect`);
+      console.log(`VERIFIED  ${actual} matches --expect`);
     } else {
-      console.error(`MISMATCH  replay ${hex(actual)} != expected ${hex(expected)}`);
+      console.error(`MISMATCH  replay ${actual} != expected ${expected}`);
       process.exit(1);
     }
   }

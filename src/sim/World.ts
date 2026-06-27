@@ -15,7 +15,10 @@ import {
   AimState, createAim, aimAngle, adjustElevation, setFacing, startCharge, updateCharge, release,
 } from '../core/aim';
 import { nextRandom } from '../core/rng';
+import { dcos, dsin } from '../core/trig';
 import { FIXED_DT } from '../core/time';
+import { blake2b } from '@noble/hashes/blake2.js';
+import { serializeWorld, CKB_HASH_PERSONAL } from './serialize';
 
 export const APE_GRAVITY = 900; // px/s^2 — apes fall faster than projectiles
 export const APE_WIDTH = 24;
@@ -35,7 +38,6 @@ const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
 
 export type Phase = 'AIMING' | 'RESOLVING' | 'TURN_END' | 'GAMEOVER';
-const PHASE_ORDER: Phase[] = ['AIMING', 'RESOLVING', 'TURN_END', 'GAMEOVER'];
 
 export interface ApeState {
   team: number;   // 0 or 1
@@ -150,8 +152,8 @@ export function muzzle(world: WorldState): Vec2 {
   const angle = aimAngle(world.aim);
   const clearance = 22;
   return {
-    x: ape.x + Math.cos(angle) * clearance,
-    y: ape.y - APE_HEIGHT / 2 - Math.sin(angle) * clearance,
+    x: ape.x + dcos(angle) * clearance,
+    y: ape.y - APE_HEIGHT / 2 - dsin(angle) * clearance,
   };
 }
 
@@ -278,7 +280,7 @@ function fire(world: WorldState, power: number): void {
     prevPos: { x: m.x, y: m.y },
     state: {
       pos: { x: m.x, y: m.y },
-      vel: { x: Math.cos(angle) * speed, y: -Math.sin(angle) * speed },
+      vel: { x: dcos(angle) * speed, y: -dsin(angle) * speed },
     },
     weapon: i,
   };
@@ -381,49 +383,13 @@ export function detonateAt(world: WorldState, x: number, y: number, radius: numb
   applyBlast(world, x, y, radius, damage);
 }
 
-/** Deterministic FNV-1a fingerprint over the full world. Field order must stay stable across versions to keep replays verifiable. */
-export function hashWorld(world: WorldState): number {
-  let h = 2166136261 >>> 0;
-  const mix = (n: number): void => {
-    h = Math.imul(h ^ (n >>> 0), 16777619) >>> 0;
-  };
-  const mixF = (f: number): void => mix(Math.round(f * 1000));
-
-  mix(world.tick);
-  mix(world.rng);
-  mix(PHASE_ORDER.indexOf(world.phase));
-  mix(world.activeApe);
-  mix(world.turnTimer);
-  mix(world.resolveTimer);
-  mix((world.winner ?? 99) >>> 0);
-  mix(world.teamNext[0]);
-  mix(world.teamNext[1]);
-  mixF(world.wind);
-  for (const ape of world.apes) {
-    mix(ape.team);
-    mixF(ape.health);
-    mixF(ape.x);
-    mixF(ape.y);
-    mixF(ape.velX);
-    mixF(ape.velY);
-  }
-  mix(world.aim.facing);
-  mixF(world.aim.elevation);
-  mixF(world.aim.power);
-  mix(world.aim.isCharging ? 1 : 0);
-  mix(world.selectedWeapon);
-  for (let t = 0; t < world.ammo.length; t++) {
-    for (let i = 0; i < world.ammo[t].length; i++) mix(world.ammo[t][i]);
-  }
-  mix(world.shot ? 1 : 0);
-  if (world.shot) {
-    mixF(world.shot.state.pos.x);
-    mixF(world.shot.state.pos.y);
-    mixF(world.shot.state.vel.x);
-    mixF(world.shot.state.vel.y);
-    mix(world.shot.weapon);
-  }
-  const { data } = world.mask;
-  for (let i = 0; i < data.length; i++) mix(data[i]);
-  return h >>> 0;
+/**
+ * 32-byte cryptographic commitment to the full world: blake2b-256 over the
+ * canonical serialization, using CKB's ckbhash personalization so an on-chain
+ * CKB-VM verifier reproduces the exact digest via the chain's native blake2b.
+ * Verification is re-execution: replay the tape, commit, compare to the claim.
+ */
+export function commitWorld(world: WorldState): Uint8Array {
+  return blake2b(serializeWorld(world), { dkLen: 32, personalization: CKB_HASH_PERSONAL });
 }
+

@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createWorld, hashWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
+  createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
 } from '../src/sim/World';
+import { toHex } from '../src/sim/serialize';
 import { WEAPON_ORDER } from '../src/weapons/weaponData';
 
 const W = 1280;
 const H = 720;
 const idle = { aimUp: false, aimDown: false, fireHeld: false, firePressed: false, fireReleased: false };
+const commitHex = (w: Parameters<typeof commitWorld>[0]): string => toHex(commitWorld(w));
 
 describe('createWorld (3v3)', () => {
   it('builds APES_PER_TEAM apes per team, full health, on a surface', () => {
@@ -28,13 +30,13 @@ describe('createWorld (3v3)', () => {
   });
 });
 
-describe('hashWorld', () => {
+describe('commitWorld', () => {
   it('is deterministic and reflects ape health changes', () => {
     const a = createWorld(7, W, H);
     const b = createWorld(7, W, H);
-    expect(hashWorld(a)).toBe(hashWorld(b));
+    expect(commitHex(a)).toBe(commitHex(b));
     a.apes[0].health -= 10;
-    expect(hashWorld(a)).not.toBe(hashWorld(b));
+    expect(commitHex(a)).not.toBe(commitHex(b));
   });
 
   it('advances tick deterministically under empty input', () => {
@@ -43,7 +45,7 @@ describe('hashWorld', () => {
     expect(w.tick).toBe(1);
     const again = createWorld(7, W, H);
     stepWorld(again, idle);
-    expect(hashWorld(w)).toBe(hashWorld(again));
+    expect(commitHex(w)).toBe(commitHex(again));
   });
 });
 
@@ -198,12 +200,12 @@ describe('P3 weapon selection', () => {
 describe('P3 hash covers economy state', () => {
   it('selectedWeapon and ammo change the hash', () => {
     const w = createWorld(1, 1280, 720);
-    const base = hashWorld(w);
+    const base = commitHex(w);
     w.selectedWeapon = 2;
-    expect(hashWorld(w)).not.toBe(base);
+    expect(commitHex(w)).not.toBe(base);
     const w2 = createWorld(1, 1280, 720);
     w2.ammo[1][3] = 99;
-    expect(hashWorld(w2)).not.toBe(base);
+    expect(commitHex(w2)).not.toBe(base);
   });
 });
 
