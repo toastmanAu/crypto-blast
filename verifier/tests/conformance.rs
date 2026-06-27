@@ -7,6 +7,7 @@ use verifier::quantize;
 use verifier::{create_world, load_fixture_world, serialize_world};
 use verifier::{dcos, dsin, dsin_full};
 use verifier::{step_projectile, weapon_at, ProjectileState, Vec2};
+use verifier::{step_world, TickInput};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
@@ -162,6 +163,26 @@ fn step_projectile_matches_ts_bitexact() {
             "step {i}"
         );
     }
+}
+
+#[test]
+fn step_world_advances_tick_deterministically() {
+    let idle = TickInput {
+        aim_up: false,
+        aim_down: false,
+        aim_left: false,
+        aim_right: false,
+        fire_held: false,
+        fire_pressed: false,
+        fire_released: false,
+        select_weapon: None,
+    };
+    let mut a = create_world(7, 1280, 720);
+    let mut b = create_world(7, 1280, 720);
+    step_world(&mut a, &idle);
+    step_world(&mut b, &idle);
+    assert_eq!(a.tick, 1);
+    assert_eq!(serialize_world(&a), serialize_world(&b));
 }
 
 #[test]

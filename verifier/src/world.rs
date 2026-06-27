@@ -7,11 +7,15 @@
 //! semantics) and u32s use two's-complement reinterpret (JS `n >>> 0`) so that
 //! `-1` encodes as `0xFFFFFFFF` and `winner == null` encodes as `99`.
 
-use crate::aim::{create_aim, AimState};
-use crate::physics::ProjectileState;
-use crate::terrain::generate_terrain_mask;
+use crate::aim::{
+    adjust_elevation, aim_angle, create_aim, release, set_facing, start_charge, update_charge,
+    AimState,
+};
+use crate::physics::{carve_circle, is_solid, step_projectile, ProjectileState, Vec2};
+use crate::terrain::{generate_terrain_mask, TerrainMask};
+use crate::trig::{dcos, dsin};
 use crate::weapons::{weapon_at, WEAPON_COUNT};
-use crate::{column_surface, quantize};
+use crate::{column_surface, next_random, quantize};
 use serde::Deserialize;
 use std::fs;
 
@@ -23,6 +27,19 @@ const MAX_WIND: f64 = 220.0;
 const TURN_TICKS: i64 = 1500;
 const SPAWN_MARGIN: f64 = 0.10;
 const SPAWN_SPAN: f64 = 0.28;
+
+// --- stepWorld / turn-loop / physics constants, ported from src/sim/World.ts ---
+const APE_GRAVITY: f64 = 900.0; // px/s^2 — apes fall faster than projectiles
+const SHOT_SUBSTEPS: usize = 4; // anti-tunnelling sub-steps per tick
+const RESOLVE_MAX_TICKS: i64 = 400; // 8 s spiral guard for the settle wait
+const KNOCKBACK: f64 = 320.0; // px/s impulse at blast centre
+const FALL_DAMAGE_THRESHOLD: f64 = 600.0; // px/s landing speed before damage
+const FALL_DAMAGE_SCALE: f64 = 0.05; // health lost per px/s over the threshold
+const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
+const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
+/// The simulation's one and only timestep, in seconds (mirrors `FIXED_DT` in
+/// `src/core/time.ts` = `1 / 50`).
+const FIXED_DT: f64 = 1.0 / 50.0;
 
 /// Phase strings in the canonical order; the index is what gets serialized.
 /// Mirrors `PHASE_ORDER` / `indexOf` in `serialize.ts` (missing -> -1).
@@ -89,10 +106,13 @@ pub struct WorldState {
     /// `0xFFFFFFFF`).
     pub ammo: Vec<Vec<i64>>,
     pub shot: Option<ShotState>,
-    /// Raw terrain mask bytes, appended verbatim. Populated by
+    /// Terrain occupancy mask (width/height + raw bytes). Carries its own
+    /// dimensions so physics helpers and `alive()` can use them (the world's
+    /// width/height are not otherwise stored). The `data` bytes are appended
+    /// verbatim by `serialize_world`. Populated by [`create_world`] /
     /// [`load_fixture_world`], not deserialized from JSON.
     #[serde(skip)]
-    pub mask: Vec<u8>,
+    pub mask: TerrainMask,
 }
 
 /// Growable little-endian byte writer mirroring `ByteWriter` in `serialize.ts`.
@@ -169,7 +189,7 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.u32(shot.weapon);
     }
 
-    w.bytes(&world.mask);
+    w.bytes(&world.mask.data);
     w.buf
 }
 
@@ -231,7 +251,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         selected_weapon: 0,
         ammo: vec![start_ammo.clone(), start_ammo],
         shot: None,
-        mask: mask.data,
+        mask,
     }
 }
 
@@ -241,6 +261,366 @@ pub fn load_fixture_world(json_path: &str, mask_path: &str) -> WorldState {
     let json = fs::read_to_string(json_path).unwrap_or_else(|e| panic!("read {json_path}: {e}"));
     let mut world: WorldState =
         serde_json::from_str(&json).unwrap_or_else(|e| panic!("parse {json_path}: {e}"));
-    world.mask = fs::read(mask_path).unwrap_or_else(|e| panic!("read {mask_path}: {e}"));
+    // The fixture world is the standard 1280x720 arena; the loader knows the
+    // dimensions, and the mask byte length (width*height) is validated by the
+    // serialize parity tests.
+    let data = fs::read(mask_path).unwrap_or_else(|e| panic!("read {mask_path}: {e}"));
+    world.mask = TerrainMask {
+        width: 1280,
+        height: 720,
+        data,
+    };
     world
+}
+
+/// Per-tick input. Mirrors the TS `TickInput` interface (snake_case here).
+/// Optional facing fields default to `false`; `select_weapon` is `Some` only on
+/// the tick a selection is confirmed.
+#[derive(Debug, Clone)]
+pub struct TickInput {
+    pub aim_up: bool,
+    pub aim_down: bool,
+    pub aim_left: bool,
+    pub aim_right: bool,
+    pub fire_held: bool,
+    pub fire_pressed: bool,
+    pub fire_released: bool,
+    pub select_weapon: Option<i32>,
+}
+
+/// True if an ape is still in play. Ported from `alive` in `src/sim/World.ts`.
+fn alive(ape: &ApeState, height: f64) -> bool {
+    ape.health > 0.0 && ape.y <= height
+}
+
+/// Global ape indices belonging to a team, in placement order.
+/// Ported from `teamApeIndices` in `src/sim/World.ts`.
+fn team_ape_indices(world: &WorldState, team: i64) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, ape) in world.apes.iter().enumerate() {
+        if ape.team == team {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// Logical muzzle of the active ape. Ported from `muzzle` in `src/sim/World.ts`.
+pub fn muzzle(world: &WorldState) -> Vec2 {
+    let ape = &world.apes[world.active_ape as usize];
+    let angle = aim_angle(&world.aim);
+    let clearance = 22.0;
+    Vec2 {
+        x: ape.x + dcos(angle) * clearance,
+        y: ape.y - APE_HEIGHT / 2.0 - dsin(angle) * clearance,
+    }
+}
+
+/// Advance the world exactly one fixed tick. Byte-exact port of `stepWorld` in
+/// `src/sim/World.ts`. The `events` array is cleared each tick in TS but is not
+/// part of the serialized state, so it has no Rust counterpart.
+pub fn step_world(world: &mut WorldState, input: &TickInput) {
+    if world.phase == "GAMEOVER" {
+        settle_apes(world);
+        world.tick += 1;
+        return;
+    }
+
+    if world.phase == "AIMING" {
+        if let Some(i) = input.select_weapon {
+            let team = world.apes[world.active_ape as usize].team as usize;
+            if i >= 0 && (i as usize) < WEAPON_COUNT && world.ammo[team][i as usize] != 0 {
+                world.selected_weapon = i as i64;
+            }
+        }
+        if input.aim_up {
+            adjust_elevation(&mut world.aim, 1.0, FIXED_DT);
+        }
+        if input.aim_down {
+            adjust_elevation(&mut world.aim, -1.0, FIXED_DT);
+        }
+        if input.aim_left {
+            set_facing(&mut world.aim, -1);
+        }
+        if input.aim_right {
+            set_facing(&mut world.aim, 1);
+        }
+        if world.shot.is_none() {
+            if input.fire_pressed {
+                start_charge(&mut world.aim);
+            }
+            if input.fire_held {
+                update_charge(&mut world.aim, FIXED_DT);
+            }
+            if input.fire_released {
+                let power = release(&mut world.aim);
+                fire(world, power);
+            }
+            if world.shot.is_some() {
+                // Shot just launched — enter RESOLVING immediately.
+                world.phase = "RESOLVING".to_string();
+                world.resolve_timer = 0;
+            } else {
+                world.turn_timer -= 1;
+                if world.turn_timer <= 0 {
+                    world.phase = "TURN_END".to_string();
+                }
+            }
+        }
+    }
+
+    advance_shot(world);
+    settle_apes(world);
+
+    if world.phase == "RESOLVING" {
+        world.resolve_timer += 1;
+        if world_at_rest(world) || world.resolve_timer >= RESOLVE_MAX_TICKS {
+            world.phase = "TURN_END".to_string();
+        }
+    }
+
+    if world.phase == "TURN_END" {
+        end_turn(world);
+    }
+
+    world.tick += 1;
+}
+
+/// No shot in flight and every living ape is motionless.
+/// Ported from `worldAtRest` in `src/sim/World.ts`.
+fn world_at_rest(world: &WorldState) -> bool {
+    if world.shot.is_some() {
+        return false;
+    }
+    let height = world.mask.height as f64;
+    for ape in &world.apes {
+        if !alive(ape, height) {
+            continue;
+        }
+        if ape.vel_x != 0.0 || ape.vel_y != 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Ported from `countAlive` in `src/sim/World.ts`.
+fn count_alive(world: &WorldState, team: i64) -> i64 {
+    let height = world.mask.height as f64;
+    let mut n = 0;
+    for ape in &world.apes {
+        if ape.team == team && alive(ape, height) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Rotate to the next ape on the other team and start a fresh AIMING turn.
+/// Ported from `endTurn` in `src/sim/World.ts`.
+fn end_turn(world: &mut WorldState) {
+    world.shot = None; // discard any projectile still in flight if the guard fired
+    let a0 = count_alive(world, 0);
+    let a1 = count_alive(world, 1);
+    if a0 == 0 || a1 == 0 {
+        world.winner = Some(if a0 == 0 && a1 == 0 {
+            -1
+        } else if a0 == 0 {
+            1
+        } else {
+            0
+        });
+        world.phase = "GAMEOVER".to_string();
+        return;
+    }
+    let next_team = 1 - world.apes[world.active_ape as usize].team;
+    world.active_ape = next_living_ape_on_team(world, next_team);
+    reroll_turn(world);
+    world.phase = "AIMING".to_string();
+}
+
+/// Next LIVING ape on a team, advancing the per-team cursor and skipping corpses.
+/// Ported from `nextLivingApeOnTeam` in `src/sim/World.ts`.
+fn next_living_ape_on_team(world: &mut WorldState, team: i64) -> i64 {
+    let roster = team_ape_indices(world, team);
+    let height = world.mask.height as f64;
+    let start = (world.team_next[team as usize] as usize) % roster.len();
+    for k in 0..roster.len() {
+        let pos = (start + k) % roster.len();
+        let idx = roster[pos];
+        if alive(&world.apes[idx], height) {
+            world.team_next[team as usize] = ((pos + 1) % roster.len()) as i64;
+            return idx as i64;
+        }
+    }
+    world.active_ape // unreachable: win check guarantees a living ape exists
+}
+
+/// Ported from `rerollTurn` in `src/sim/World.ts`. The ONLY place `world.rng`
+/// advances — exactly once per turn transition.
+fn reroll_turn(world: &mut WorldState) {
+    let (value, next) = next_random(world.rng as i32);
+    world.rng = next as i64;
+    world.wind = (value * 2.0 - 1.0) * MAX_WIND;
+    // Default facing toward the enemy: team 0 (left) faces right, team 1 left.
+    let facing = if world.apes[world.active_ape as usize].team == 0 {
+        1
+    } else {
+        -1
+    };
+    world.aim = create_aim(facing);
+    world.turn_timer = TURN_TICKS;
+    world.resolve_timer = 0;
+}
+
+/// Ported from `fire` in `src/sim/World.ts`.
+fn fire(world: &mut WorldState, power: f64) {
+    if power <= 0.0 {
+        return;
+    }
+    let i = world.selected_weapon as usize;
+    let team = world.apes[world.active_ape as usize].team as usize;
+    if world.ammo[team][i] == 0 {
+        return; // empty: cannot fire
+    }
+    let weapon = weapon_at(i);
+    let speed = power * weapon.launch_speed;
+    let angle = aim_angle(&world.aim);
+    let m = muzzle(world);
+    world.shot = Some(ShotState {
+        state: ProjectileState {
+            pos: Vec2 { x: m.x, y: m.y },
+            vel: Vec2 {
+                x: dcos(angle) * speed,
+                y: -dsin(angle) * speed,
+            },
+        },
+        weapon: i as i64,
+    });
+    if world.ammo[team][i] > 0 {
+        world.ammo[team][i] -= 1;
+        // Last round of a finite weapon spent — revert sticky selection to
+        // moonShot (index 0) so the next turn's fire trigger is never dead.
+        if world.ammo[team][i] == 0 {
+            world.selected_weapon = 0;
+        }
+    }
+}
+
+/// Ported from `settleApes` in `src/sim/World.ts`. (`prevX`/`prevY` are render
+/// interpolation only — not serialized, not read by any deterministic logic —
+/// so they have no Rust counterpart.)
+fn settle_apes(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    for ape in world.apes.iter_mut() {
+        if !alive(ape, height) {
+            continue; // dead apes don't move
+        }
+
+        // Horizontal: integrate velX, stop dead at a solid wall (mid-height probe).
+        if ape.vel_x != 0.0 {
+            let nx = ape.x + ape.vel_x * FIXED_DT;
+            if is_solid(&world.mask, nx, ape.y) {
+                ape.vel_x = 0.0;
+            } else {
+                ape.x = nx;
+            }
+        }
+
+        // Vertical: gravity while airborne; on landing apply fall damage + friction.
+        let feet_y = ape.y + APE_HEIGHT / 2.0;
+        if !is_solid(&world.mask, ape.x, feet_y + 1.0) {
+            ape.vel_y += APE_GRAVITY * FIXED_DT;
+            ape.y += ape.vel_y * FIXED_DT;
+        } else {
+            if ape.vel_y > FALL_DAMAGE_THRESHOLD {
+                ape.health -= FALL_DAMAGE_SCALE * (ape.vel_y - FALL_DAMAGE_THRESHOLD);
+            }
+            ape.vel_y = 0.0;
+            ape.vel_x *= GROUND_FRICTION;
+            if ape.vel_x.abs() < REST_EPSILON {
+                ape.vel_x = 0.0;
+            }
+        }
+
+        // Water: clamp a fallen ape to a stable sentinel y (it's dead via alive()).
+        if ape.y > height + 50.0 {
+            ape.y = height + 50.0;
+            ape.vel_x = 0.0;
+            ape.vel_y = 0.0;
+        }
+    }
+}
+
+/// Ported from `advanceShot` in `src/sim/World.ts`. Semi-implicit Euler with
+/// `SHOT_SUBSTEPS` anti-tunnelling sub-steps; sub-dt = `FIXED_DT / SHOT_SUBSTEPS`.
+/// (`prevPos` is render-only and omitted.)
+fn advance_shot(world: &mut WorldState) {
+    if world.shot.is_none() {
+        return;
+    }
+    let weapon = weapon_at(world.shot.as_ref().unwrap().weapon as usize);
+    let sub = FIXED_DT / SHOT_SUBSTEPS as f64;
+    let wind = world.wind;
+    let width = world.mask.width as f64;
+    let height = world.mask.height as f64;
+    for _ in 0..SHOT_SUBSTEPS {
+        let next_state = {
+            let shot = world.shot.as_ref().unwrap();
+            step_projectile(&shot.state, &weapon.projectile, wind, sub)
+        };
+        world.shot.as_mut().unwrap().state = next_state;
+        let (x, y) = {
+            let pos = world.shot.as_ref().unwrap().state.pos;
+            (pos.x, pos.y)
+        };
+        let offscreen = x < -50.0 || x > width + 50.0 || y > height + 50.0;
+        if is_solid(&world.mask, x, y) || offscreen {
+            if !offscreen {
+                detonate(world, x, y, weapon.blast_radius);
+            }
+            world.shot = None;
+            return;
+        }
+    }
+}
+
+/// Ported from `detonate` in `src/sim/World.ts`. The detonation `SimEvent` is
+/// pushed in TS but not serialized, so it has no Rust counterpart. `world.shot`
+/// is still `Some` here (cleared by the caller after detonate returns), matching
+/// the TS weapon lookup for damage.
+fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
+    carve_circle(&mut world.mask, x, y, radius);
+    let damage = match &world.shot {
+        Some(shot) => weapon_at(shot.weapon as usize).damage,
+        None => weapon_at(0).damage,
+    };
+    apply_blast(world, x, y, radius, damage);
+}
+
+/// Radial falloff damage + knockback to every living ape within `radius`.
+/// Ported from `applyBlast` in `src/sim/World.ts`. Uses `f64::sqrt` for distance.
+fn apply_blast(world: &mut WorldState, x: f64, y: f64, radius: f64, damage: f64) {
+    let height = world.mask.height as f64;
+    for ape in world.apes.iter_mut() {
+        if !alive(ape, height) {
+            continue;
+        }
+        let dx = ape.x - x;
+        let dy = ape.y - y;
+        let d = (dx * dx + dy * dy).sqrt();
+        if d > radius {
+            continue;
+        }
+        let falloff = 1.0 - d / radius;
+        ape.health -= damage * falloff;
+        let (nx, ny) = if d == 0.0 {
+            (0.0, -1.0) // dead-centre: launch straight up
+        } else {
+            (dx / d, dy / d)
+        };
+        let impulse = KNOCKBACK * falloff;
+        ape.vel_x += nx * impulse;
+        ape.vel_y += ny * impulse;
+    }
 }

@@ -22,6 +22,10 @@ use std::f64::consts::PI;
 
 /// Terrain occupancy mask: `data[y*width + x]` is `1` for solid, `0` for empty.
 /// Mirrors the TS `TerrainMask` interface (`Uint8Array` -> `Vec<u8>`).
+///
+/// `Default` is required because [`crate::world::WorldState`] holds a
+/// `#[serde(skip)]` mask; serde fills skipped fields via `Default`.
+#[derive(Debug, Default)]
 pub struct TerrainMask {
     pub width: i32,
     pub height: i32,
