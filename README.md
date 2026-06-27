@@ -79,7 +79,7 @@ The **off-chain verifier works today** and runs in CI as part of the test suite 
 - **The commitment is CKB-native.** It's blake2b-256 with CKB's `ckb-default-hash` personalization, so a CKB-VM verifier computes the identical 32-byte digest via the native `ckb_blake2b` — no hash to port into RISC-V.
 - **The simulation is cross-engine deterministic.** The sim path uses only operations ECMAScript requires to be correctly-rounded (`+ - * /`, `Math.sqrt`) plus integer/exact ops. The one prior gap — `Math.cos` / `Math.sin` for launch angles, which are *implementation-approximated* and differ across engines — is gone: `src/core/trig.ts` provides `dsin`/`dcos` built from deterministic ops only (range-reduced Taylor polynomial), verified to stay correct even with `Math.sin`/`Math.cos` sabotaged (`tests/trig.test.ts`). The commitment is therefore identical on any conformant engine, not just V8.
 
-What remains for true **on-chain** verification is the **CKB-VM / RISC-V verifier program itself** (a planned stretch goal) — porting the sim's `stepWorld` + `serializeWorld` + `commitWorld` into an on-chain script. The hard determinism prerequisites are now met.
+The **CKB-VM / RISC-V verifier lock script is implemented** (`verifier/contract/`). It is a CKB lock script whose args commit to `(seed, claimed_commitment)` (36 bytes); spending it requires a `WitnessArgs.lock` carrying the binary replay tape. The kernel re-executes the sim from `seed`, computes `blake2b-256(serialize_world)`, and exits 0 only if the recomputed digest matches the claim. Three ckb-testtool tests gate the protocol: accept valid tape, reject forged commitment, reject wrong seed — all PASS (54 M cycles in-VM, well under block limits). Testnet broadcast is a manual runbook (`docs/VERIFIER_DEPLOY.md`) — locally proven via ckb-testtool, not yet broadcast.
 
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
@@ -119,7 +119,7 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 - **P3** — data-driven arsenal + radial weapon wheel + per-team ammo, threaded through the deterministic pipeline. ✅
 - **P4** — special munition behaviours (cluster shrapnel, seed sub-bombs, proximity mines, gas DoT cloud, Bridge teleport). ⏳
 - **Commitment hardening** — 32-byte blake2b-256 commitment (`commitWorld`, CKB-native `ckbhash`) over a canonical float-safe serialization; deterministic `dsin`/`dcos` so the commitment is cross-engine canonical. ✅
-- **On-chain (stretch)** — port `stepWorld` + `serializeWorld` + `commitWorld` into a CKB-VM replay-verifier script. ⏳
+- **On-chain verifier lock script** — `verifier/contract/` ckb-std lock script; ckb-testtool accept/reject PASS (54 M cycles, ~187 KB binary); testnet broadcast = manual runbook (`docs/VERIFIER_DEPLOY.md`). ✅ (locally proven)
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 

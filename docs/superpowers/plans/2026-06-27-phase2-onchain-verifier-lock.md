@@ -472,7 +472,7 @@ git add docs/COMMITMENT.md README.md docs/superpowers/plans/2026-06-27-phase2-on
 git commit -m "docs: verifier lock-script protocol + Phase 2 result"
 ```
 
-> **Phase 2 result (fill in at completion):** ckb-testtool accept-valid/reject-forged/reject-wrong-seed = ___; contract binary = ___ KB; full-match verify cycles in-VM = ___; testnet verify tx (manual, optional) = ___.
+> **Phase 2 result:** ckb-testtool accept-valid/reject-forged/reject-wrong-seed = **PASS / PASS / PASS**; contract binary = **187 KB** (191,872 bytes, riscv64imac release); full-match verify cycles in-VM = **54,070,560** (~54 M, ≪ 200 M block limit); testnet verify tx = (manual runbook only — not yet broadcast).
 
 ---
 

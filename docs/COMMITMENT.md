@@ -160,3 +160,94 @@ future, larger arena (or multiple concurrent masks) pushes the working set
 toward the 4 MB ceiling — at which point bit-packing the mask is the obvious
 first lever (it would cut the dominant ~0.92 MB term to ~0.12 MB and likely also
 reduce the blake2b cost that currently dominates the cycle count).
+
+---
+
+## 7. On-chain verification (lock script)
+
+Phase 2 delivers a CKB **lock script** that is the on-chain verifier kernel
+(`verifier/contract/`). A cell whose lock commits to a match outcome can be
+spent only by a witness carrying a binary replay tape that re-executes to that
+exact commitment — a hash-preimage lock where the "hash" is a full deterministic
+re-execution of the match.
+
+### Lock-script protocol
+
+```
+lock.args = seed (4 bytes, little-endian i32)
+          ‖ claimed_commitment (32 bytes, blake2b-256 digest)
+          = 36 bytes total
+```
+
+The spending input's `WitnessArgs.lock` carries the **binary tape** — the
+compact 2-bytes-per-tick encoding produced by
+[`src/sim/tapeBinary.ts`](../src/sim/tapeBinary.ts) and consumed by
+`verifier/src/tape.rs`:
+
+```
+byte0 = bool flags  (bit0 aimUp, bit1 aimDown, bit2 aimLeft, bit3 aimRight,
+                     bit4 fireHeld, bit5 firePressed, bit6 fireReleased; bit7 = 0)
+byte1 = selectWeapon (0–5, or 0xFF = none)
+```
+
+Tick count = `tape_bytes.len() / 2`. The seed is NOT in the tape; it lives in
+the lock args and is immutable once the cell is created.
+
+### Unlock condition (the kernel algorithm)
+
+```
+seed  ← lock.args[0..4] as i32 LE
+claim ← lock.args[4..36]
+tape  ← WitnessArgs.lock bytes
+
+world ← create_world(seed, 1280, 720)    // width/height are hardcoded in the kernel
+for each tick in decode_tape(tape):
+    step_world(&mut world, tick)
+
+digest ← blake2b-256("ckb-default-hash", serialize_world(world))
+exit 0  iff  digest == claim   // constant-time byte compare
+exit 5  otherwise
+```
+
+`create_world`, `step_world`, `serialize_world`, and `decode_tape` are reused
+verbatim from the Phase-1 `verifier` lib (no_std, `libm` floor/ceil/sqrt,
+`blake2b-ref`). No sim logic was modified.
+
+### Trust properties
+
+- **Seed and claimed result are immutable in the lock args.** Once a cell is
+  created with `lock.args = seed ‖ commitment`, no party can substitute a
+  different terrain seed or claim a different outcome — the cell's identity is
+  bound to exactly those 36 bytes.
+- **The tape is the unlock proof.** Only inputs that, when stepped forward from
+  `seed`, yield a world state hashing to `commitment`, can unlock the cell.
+  A fabricated tape that commits to a different result will fail the kernel's
+  byte-compare and exit 5.
+- **No trust in the tape contents themselves.** Any tape producing the claimed
+  commitment unlocks the cell — the kernel verifies the *result*, not the move
+  sequence. The claimed commitment in the lock args is the source of truth.
+
+### Numbers
+
+| Metric | Value |
+|--------|-------|
+| Contract binary (`riscv64imac-unknown-none-elf`, release) | 191,872 bytes (**~187 KB**) |
+| Full-match verify cycles in-VM (ckb-testtool `accepts_valid_tape`) | **54,070,560** (~54 M) |
+| Cycle budget ceiling (`verify_tx` limit) | 200,000,000 (~3.7× headroom) |
+| On-chain tape — largest fixture (`tape-turnloop.bin`, 1084 ticks) | 2,168 bytes (~2 KB) |
+| On-chain tape — demo fixture (`tape-demo.bin`, 304 ticks) | 608 bytes |
+
+Cycle cost is dominated by terrain generation + `step_world × N` + blake2b
+(see §5). The contract binary is larger than the Phase-1 bench binary because
+it links `ckb-std`, `ckb-types`, and `molecule` for the syscall ABI; LTO is
+disabled as a workaround for the CKB-VM single-hart ISA atomics constraint.
+
+### Proof status
+
+- **ckb-testtool (in-memory CKB-VM simulation):** `accepts_valid_tape` PASS,
+  `rejects_forged_commitment` PASS, `rejects_wrong_seed` PASS.
+  See `verifier/contract/tests/verify.rs`.
+- **Testnet broadcast:** manual runbook only — the automated tooling builds and
+  dry-runs the transactions, but no broadcast is made without a human supplying
+  `CKB_PRIVKEY`. See [`docs/VERIFIER_DEPLOY.md`](VERIFIER_DEPLOY.md) for the
+  step-by-step testnet procedure.
