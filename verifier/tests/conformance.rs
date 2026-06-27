@@ -1,3 +1,4 @@
+use blake2b_ref::Blake2bBuilder;
 use std::fs;
 use verifier::ckbhash;
 use verifier::quantize;
@@ -41,4 +42,31 @@ fn commit_over_exported_bytes_matches_golden() {
     let want = fs::read_to_string("tests/fixture-initial.hash").unwrap();
     let want = want.trim().trim_start_matches("0x");
     assert_eq!(hex(&ckbhash(&bytes)), want);
+}
+
+#[test]
+fn blake2b_ref_matches_golden_and_ckbhash() {
+    let bytes = fs::read("tests/fixture-initial.bin").expect("run scripts/export-fixture.ts");
+    let golden = fs::read_to_string("tests/fixture-initial.hash").unwrap();
+    let golden = golden.trim().trim_start_matches("0x");
+
+    // Compute via blake2b-ref — the no_std hasher that ships on-chain.
+    // Mirror the exact construction used in verifier/bench/src/main.rs.
+    let mut hasher = Blake2bBuilder::new(32)
+        .personal(b"ckb-default-hash")
+        .build();
+    hasher.update(&bytes);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    let ref_hex = hex(&out);
+
+    // Pin no_std path to the golden commitment file.
+    assert_eq!(ref_hex, golden, "blake2b-ref diverges from fixture-initial.hash");
+
+    // Pin no_std path to the std blake2b-rs path so both are locked to each other.
+    assert_eq!(
+        ref_hex,
+        hex(&ckbhash(&bytes)),
+        "blake2b-ref and ckbhash (blake2b-rs) diverge"
+    );
 }
