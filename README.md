@@ -81,6 +81,8 @@ The **off-chain verifier works today** and runs in CI as part of the test suite 
 
 The **CKB-VM / RISC-V verifier lock script is implemented** (`verifier/contract/`). It is a CKB lock script whose args commit to `(seed, claimed_commitment)` (36 bytes); spending it requires a `WitnessArgs.lock` carrying the binary replay tape. The kernel re-executes the sim from `seed`, computes `blake2b-256(serialize_world)`, and exits 0 only if the recomputed digest matches the claim. Three ckb-testtool tests gate the protocol: accept valid tape, reject forged commitment, reject wrong seed — all PASS (54 M cycles in-VM, well under block limits). Testnet broadcast is a manual runbook (`docs/VERIFIER_DEPLOY.md`) — locally proven via ckb-testtool, not yet broadcast.
 
+The **trustless-wager escrow primitive is implemented** (`verifier/contract/src/escrow.rs`, see `docs/ESCROW.md`). It turns the verifier into money: a cell holding both players' stakes pays the real winner via three spend paths — a cheap mutual-signed *happy* path, a *court* path that replays a per-turn-signed match tape and extracts the winner, and a timeout *refund*. The seed is chosen by commit-reveal (neither player picks the terrain); each turn's moves are signed by the acting player; and every payout is bound to the winner by the recipient lock's `code_hash` + `hash_type` + args (not args alone — a deliberate fix for a prize-theft vector). Ten ckb-testtool tests gate all three paths. Caveat: the court path (~278 M cycles, bundled k256) exceeds the 200 M mainnet per-tx limit — a pre-mainnet optimization (dynamic-loading the system secp lib) is needed; happy/refund are well under. The economic layer (lobby, custody wiring, payout) lands in FiberQuest (Phase 4B), not here.
+
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
 ---
@@ -120,6 +122,7 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 - **P4** — special munition behaviours (cluster shrapnel, seed sub-bombs, proximity mines, gas DoT cloud, Bridge teleport). ⏳
 - **Commitment hardening** — 32-byte blake2b-256 commitment (`commitWorld`, CKB-native `ckbhash`) over a canonical float-safe serialization; deterministic `dsin`/`dcos` so the commitment is cross-engine canonical. ✅
 - **On-chain verifier lock script** — `verifier/contract/` ckb-std lock script; ckb-testtool accept/reject PASS (54 M cycles, ~187 KB binary); testnet broadcast = manual runbook (`docs/VERIFIER_DEPLOY.md`). ✅ (locally proven)
+- **Trustless-wager escrow primitive** — `verifier/contract/src/escrow.rs` (`docs/ESCROW.md`); 2-player stake cell, court/happy/refund spend paths, commit-reveal seed + per-turn signed moves + winner-bound payout; 10/10 ckb-testtool. ✅ (locally proven; court path needs dynamic-loading secp before mainnet) — economic layer = FiberQuest **Phase 4B** ⏳
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 
