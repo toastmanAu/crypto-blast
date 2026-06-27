@@ -13,6 +13,38 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
+fn replay_commit(path_json: &str) -> String {
+    let raw = std::fs::read_to_string(path_json).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let seed = v["seed"].as_i64().unwrap() as i32;
+    let mut w = create_world(seed, 1280, 720);
+    for inp in v["inputs"].as_array().unwrap() {
+        let g = |k: &str| inp[k].as_bool().unwrap_or(false);
+        let sw = inp.get("selectWeapon").and_then(|x| x.as_i64()).map(|n| n as i32);
+        let input = TickInput {
+            aim_up: g("aimUp"),
+            aim_down: g("aimDown"),
+            aim_left: g("aimLeft"),
+            aim_right: g("aimRight"),
+            fire_held: g("fireHeld"),
+            fire_pressed: g("firePressed"),
+            fire_released: g("fireReleased"),
+            select_weapon: sw,
+        };
+        step_world(&mut w, &input);
+    }
+    format!("0x{}", hex(&ckbhash(&serialize_world(&w))))
+}
+
+#[test]
+fn tape_replays_match_ts_commitment() {
+    for name in ["demo", "turnloop", "selectfire"] {
+        let want = std::fs::read_to_string(format!("tests/tape-{name}.hash")).unwrap();
+        let got = replay_commit(&format!("tests/tape-{name}.json"));
+        assert_eq!(got, want.trim(), "tape {name} commitment diverges");
+    }
+}
+
 #[test]
 fn ckbhash_matches_known_vectors() {
     assert_eq!(

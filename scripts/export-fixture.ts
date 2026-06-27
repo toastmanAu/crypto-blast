@@ -4,6 +4,8 @@ import { writeFileSync } from 'node:fs';
 import { createWorld, commitWorld } from '../src/sim/World';
 import { serializeWorld, toHex } from '../src/sim/serialize';
 import { nextRandom } from '../src/core/rng';
+import { demoInputs, turnLoopInputs, selectThenFireInputs } from '../src/sim/demoMatch';
+import { createTape, recordTick, replay } from '../src/sim/tape';
 
 const w = createWorld(1234, 1280, 720);
 writeFileSync('verifier/tests/fixture-initial.bin', Buffer.from(serializeWorld(w)));
@@ -47,3 +49,16 @@ import { weaponAt } from '../src/weapons/weaponData';
   writeFileSync('verifier/tests/fixture-projectile.txt', rows.join('\n'));
 }
 console.log('exported projectile vectors');
+
+// Tape export: 3 scripted matches with their final commitments, so the Rust
+// verifier can replay and assert byte-identical commitments.
+function dumpTape(name: string, seed: number, inputs: ReturnType<typeof demoInputs>): void {
+  const t = createTape(seed, 1280, 720);
+  for (const inp of inputs) recordTick(t, inp);
+  writeFileSync(`verifier/tests/tape-${name}.json`, JSON.stringify({ seed, inputs: t.inputs }));
+  writeFileSync(`verifier/tests/tape-${name}.hash`, toHex(commitWorld(replay(t))));
+  console.log(`exported tape-${name} (${t.inputs.length} ticks):`, toHex(commitWorld(replay(t))));
+}
+dumpTape('demo', 1234, demoInputs());
+dumpTape('turnloop', 1234, turnLoopInputs());
+dumpTape('selectfire', 7, selectThenFireInputs());
