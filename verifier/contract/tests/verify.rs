@@ -59,7 +59,7 @@ fn run(
         .build();
     let tx = ctx.complete_tx(tx);
 
-    // Cycle ceiling well above the measured full-replay cost (~52.5M).
+    // Cycle ceiling well above the measured full-replay cost (~54M).
     ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
 }
 
