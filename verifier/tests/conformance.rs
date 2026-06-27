@@ -3,6 +3,7 @@ use std::fs;
 use verifier::ckbhash;
 use verifier::next_random;
 use verifier::quantize;
+use verifier::{dcos, dsin, dsin_full};
 use verifier::{load_fixture_world, serialize_world};
 
 fn hex(b: &[u8]) -> String {
@@ -84,4 +85,21 @@ fn blake2b_ref_matches_golden_and_ckbhash() {
         hex(&ckbhash(&bytes)),
         "blake2b-ref and ckbhash (blake2b-rs) diverge"
     );
+}
+
+#[test]
+fn trig_matches_ts_bitexact() {
+    let t = std::fs::read_to_string("tests/fixture-trig.txt").unwrap();
+    for line in t.lines() {
+        let p: Vec<&str> = line.split('|').collect();
+        let x: f64 = p[0].parse().unwrap();
+        assert_eq!(dsin(x), p[1].parse::<f64>().unwrap(), "dsin({x})");
+        assert_eq!(dcos(x), p[2].parse::<f64>().unwrap(), "dcos({x})");
+    }
+    let f = std::fs::read_to_string("tests/fixture-trig-full.txt").unwrap();
+    for line in f.lines() {
+        let p: Vec<&str> = line.split('|').collect();
+        let x: f64 = p[0].parse().unwrap();
+        assert_eq!(dsin_full(x), p[1].parse::<f64>().unwrap(), "dsin_full({x})");
+    }
 }

@@ -24,3 +24,15 @@ console.log('exported initial fixture:', toHex(commitWorld(w)));
   writeFileSync('verifier/tests/fixture-rng.txt', rows.join('\n'));
 }
 console.log('exported rng vectors');
+
+// Trig conformance vectors.
+import { dsin, dcos, dsinFull } from '../src/core/trig';
+{
+  const rows: string[] = [];
+  for (let i = 0; i <= 200; i++) { const x = (Math.PI * i) / 200; rows.push(`${x}|${dsin(x)}|${dcos(x)}`); }
+  const full: string[] = [];
+  for (let i = 0; i <= 360; i++) { const x = (Math.PI * 18 * i) / 360; full.push(`${x}|${dsinFull(x)}`); }
+  writeFileSync('verifier/tests/fixture-trig.txt', rows.join('\n'));
+  writeFileSync('verifier/tests/fixture-trig-full.txt', full.join('\n'));
+}
+console.log('exported trig vectors');
