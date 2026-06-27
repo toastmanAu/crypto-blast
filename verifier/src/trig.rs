@@ -3,7 +3,10 @@
 /// Only +, -, *, / are used (no libm).  The Horner polynomial and all
 /// symmetry reductions mirror the TypeScript source exactly so the
 /// f64 bit sequence is identical on every conformant platform.
-use std::f64::consts::{FRAC_PI_2, PI};
+use core::f64::consts::{FRAC_PI_2, PI};
+
+#[cfg(not(feature = "std"))]
+use crate::fmath::FloatExt;
 
 const TWO_PI: f64 = PI * 2.0;
 

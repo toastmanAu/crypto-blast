@@ -8,11 +8,14 @@
 
 use crate::terrain::TerrainMask;
 use crate::weapons::ProjectileParams;
-use serde::Deserialize;
+
+#[cfg(not(feature = "std"))]
+use crate::fmath::FloatExt;
 
 /// 2D vector. Mirrors the TS `Vec2` interface.
 /// Authoritative definition (world.rs imports this).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct Vec2 {
     pub x: f64,
     pub y: f64,
@@ -20,7 +23,8 @@ pub struct Vec2 {
 
 /// Projectile state (position + velocity). Mirrors the TS `ProjectileState` interface.
 /// Authoritative definition (world.rs imports this).
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct ProjectileState {
     pub pos: Vec2,
     pub vel: Vec2,

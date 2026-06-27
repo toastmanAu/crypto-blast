@@ -3,12 +3,25 @@ name = "verifier"
 version = "0.0.0"
 edition = "2021"
 
+[features]
+# `std` (default) pulls the host-only deps: serde (the WorldState mirror's
+# #[derive(Deserialize)] + serde field attrs), serde_json (the fixture loader),
+# and blake2b-rs (the host `ckbhash`). With `--no-default-features` the sim core
+# (rng/trig/terrain/aim/weapons/physics/world create+step/serialize) compiles
+# `no_std` for `riscv64imac-unknown-none-elf` so the bench can replay it on
+# CKB-VM. See verifier/bench for the no_std full-replay measurement binary.
+default = ["std"]
+std = ["dep:serde", "dep:serde_json", "dep:blake2b-rs"]
+
 [dependencies]
-blake2b-rs = "0.2"
-# serde drives the WorldState mirror's #[derive(Deserialize)] and the test-only
-# fixture loader; both live in the library so they are regular dependencies.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# All three are std-only and therefore gated behind the default `std` feature.
+blake2b-rs = { version = "0.2", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+# Pure no_std float ops (floor/ceil/sqrt) used only on the no_std path so the
+# sim's f64 maths stays bit-identical without std's libm. Always compiled
+# (tiny); referenced only inside `#[cfg(not(feature = "std"))]` code.
+libm = { version = "0.2", default-features = false }
 
 [dev-dependencies]
 # no_std blake2b used by the on-chain verifier path (bench crate + CKB-VM).

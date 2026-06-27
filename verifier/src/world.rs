@@ -16,8 +16,12 @@ use crate::terrain::{generate_terrain_mask, TerrainMask};
 use crate::trig::{dcos, dsin};
 use crate::weapons::{weapon_at, WEAPON_COUNT};
 use crate::{column_surface, next_random, quantize};
-use serde::Deserialize;
-use std::fs;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
+#[cfg(not(feature = "std"))]
+use crate::fmath::FloatExt;
 
 // --- createWorld constants, ported from src/sim/World.ts ---
 const APES_PER_TEAM: usize = 3;
@@ -56,21 +60,23 @@ fn phase_index(phase: &str) -> i64 {
 /// One ape. Mirrors the serialized subset of `ApeState` in `src/sim/World.ts`
 /// (`prevX`/`prevY` exist in the JSON but are not serialized, so they are
 /// dropped — serde ignores unknown fields by default).
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct ApeState {
     pub team: i64,
     pub health: f64,
     pub x: f64,
     pub y: f64,
-    #[serde(rename = "velX")]
+    #[cfg_attr(feature = "std", serde(rename = "velX"))]
     pub vel_x: f64,
-    #[serde(rename = "velY")]
+    #[cfg_attr(feature = "std", serde(rename = "velY"))]
     pub vel_y: f64,
 }
 
 /// In-flight shot. Mirrors the serialized subset of `ShotState` (`prevPos` is
 /// in the JSON but not serialized, so it is ignored).
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct ShotState {
     pub state: ProjectileState,
     pub weapon: i64,
@@ -80,27 +86,28 @@ pub struct ShotState {
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
 /// `prevX`/`prevY`, `events`, ...) are silently ignored by serde.
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct WorldState {
     pub tick: i64,
     pub rng: i64,
     pub phase: String,
-    #[serde(rename = "activeApe")]
+    #[cfg_attr(feature = "std", serde(rename = "activeApe"))]
     pub active_ape: i64,
-    #[serde(rename = "turnTimer")]
+    #[cfg_attr(feature = "std", serde(rename = "turnTimer"))]
     pub turn_timer: i64,
-    #[serde(rename = "resolveTimer")]
+    #[cfg_attr(feature = "std", serde(rename = "resolveTimer"))]
     pub resolve_timer: i64,
     /// `null` while the match is ongoing; `-1` for a draw; otherwise a team
     /// index. Encoded as `winner ?? 99`.
     pub winner: Option<i64>,
-    #[serde(rename = "teamNext")]
+    #[cfg_attr(feature = "std", serde(rename = "teamNext"))]
     pub team_next: [i64; 2],
     pub wind: f64,
     pub apes: Vec<ApeState>,
     /// Unified game-logic + serde aim type (see [`crate::aim::AimState`]).
     pub aim: AimState,
-    #[serde(rename = "selectedWeapon")]
+    #[cfg_attr(feature = "std", serde(rename = "selectedWeapon"))]
     pub selected_weapon: i64,
     /// `ammo[team][weaponIndex]`; `-1` means unlimited (u32-encoded as
     /// `0xFFFFFFFF`).
@@ -111,7 +118,7 @@ pub struct WorldState {
     /// width/height are not otherwise stored). The `data` bytes are appended
     /// verbatim by `serialize_world`. Populated by [`create_world`] /
     /// [`load_fixture_world`], not deserialized from JSON.
-    #[serde(skip)]
+    #[cfg_attr(feature = "std", serde(skip))]
     pub mask: TerrainMask,
 }
 
@@ -257,7 +264,12 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
 
 /// Load a fixture world: deserialize the struct (minus mask) from
 /// `json_path`, then attach the raw mask bytes read from `mask_path`.
+///
+/// Host-only: depends on `serde_json` + `std::fs`. The CKB-VM path never loads a
+/// fixture — it rebuilds the world from a seed via [`create_world`].
+#[cfg(feature = "std")]
 pub fn load_fixture_world(json_path: &str, mask_path: &str) -> WorldState {
+    use std::fs;
     let json = fs::read_to_string(json_path).unwrap_or_else(|e| panic!("read {json_path}: {e}"));
     let mut world: WorldState =
         serde_json::from_str(&json).unwrap_or_else(|e| panic!("parse {json_path}: {e}"));

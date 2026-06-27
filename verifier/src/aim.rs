@@ -1,5 +1,4 @@
-use serde::Deserialize;
-use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+use core::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 pub const ELEVATION_MIN: f64 = 0.0;
 pub const ELEVATION_MAX: f64 = FRAC_PI_2;
@@ -12,12 +11,13 @@ pub const ANGLE_SPEED: f64 = 1.6; // rad/s
 /// `Deserialize` lets this single type back the fixture-JSON loader path too
 /// (`facing` is `-1`/`1`, which fits i32); `serialize_world` casts `facing` to
 /// u32 (two's complement) on the way out.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
 pub struct AimState {
     pub facing: i32,
     pub elevation: f64,
     pub power: f64,
-    #[serde(rename = "isCharging")]
+    #[cfg_attr(feature = "std", serde(rename = "isCharging"))]
     pub is_charging: bool,
 }
 

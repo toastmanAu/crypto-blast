@@ -18,7 +18,12 @@
 
 use crate::next_random;
 use crate::trig::dsin_full;
-use std::f64::consts::PI;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::f64::consts::PI;
+
+#[cfg(not(feature = "std"))]
+use crate::fmath::FloatExt;
 
 /// Terrain occupancy mask: `data[y*width + x]` is `1` for solid, `0` for empty.
 /// Mirrors the TS `TerrainMask` interface (`Uint8Array` -> `Vec<u8>`).

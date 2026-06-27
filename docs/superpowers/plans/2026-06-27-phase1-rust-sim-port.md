@@ -38,7 +38,7 @@
 
 ## Phase 1 result (fill in at completion)
 
-> Full-match replay cycles (create_world + step_world×N + commit) = ___ cycles vs ~150M ref. Terrain now deterministic: PASS/FAIL. All tapes byte-identical: PASS/FAIL.
+> Full-match replay cycles (create_world + step_world×304 + serialize + commit) = **55,010,368 cycles (52.5M)** vs ~150M ref — **~2.7× under budget**. Measured on `riscv64imac-unknown-none-elf` under `ckb-debugger --mode fast` (`verifier/bench` `replay` binary), self-gated `Run result: 0` on the demo-tape golden `0x8dd41dc6…ed76` (so the count is provably the correct full replay). For reference the Phase-0 commit-only hash alone is 24,679,515 cycles (23.5M). Terrain now deterministic: **PASS** (`generate_terrain_mask` byte-identical to TS). All tapes byte-identical: **PASS** (Task 9, 3/3 tapes + 13/13 host conformance tests). See `docs/COMMITMENT.md`.
 
 ---
 
