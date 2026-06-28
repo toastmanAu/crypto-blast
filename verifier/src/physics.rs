@@ -106,10 +106,5 @@ pub fn column_surface(mask: &TerrainMask, x: f64) -> Option<i32> {
     if ix < 0 || ix >= mask.width {
         return None;
     }
-    for y in 0..mask.height {
-        if mask.data[(y * mask.width + ix) as usize] == 1 {
-            return Some(y);
-        }
-    }
-    None
+    (0..mask.height).find(|&y| mask.data[(y * mask.width + ix) as usize] == 1)
 }

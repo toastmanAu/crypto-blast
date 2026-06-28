@@ -69,6 +69,88 @@ pub fn attest_message(seed: i32, turn_index: u32, tape_bytes: &[u8]) -> [u8; 32]
     ])
 }
 
+/// Genesis head for the interleaved court chain: binds the match seed (and a
+/// domain tag, so a chain cannot be transplanted to another match).
+/// `blake2b256("ckb-default-hash"; "cb-court-chain-v1" ‖ seed_le)`.
+pub fn court_chain_genesis(seed: i32) -> [u8; 32] {
+    ckb_blake2b(&[b"cb-court-chain-v1".as_slice(), &seed.to_le_bytes()])
+}
+
+/// Fold one turn into the running head:
+/// `blake2b256("ckb-default-hash"; prev ‖ turn_index_le ‖ tape_bytes)`.
+/// Must be byte-identical to the TypeScript `courtChainStep`.
+pub fn court_chain_step(prev: &[u8; 32], turn_index: u32, tape_bytes: &[u8]) -> [u8; 32] {
+    ckb_blake2b(&[prev.as_slice(), &turn_index.to_le_bytes(), tape_bytes])
+}
+
+/// A decoded court envelope: the per-turn tape slices plus the two trailing
+/// final-head signatures (player0's, player1's). Borrows from `bytes`.
+pub struct CourtEnvelope<'a> {
+    pub tapes: Vec<&'a [u8]>,
+    pub sig0: &'a [u8; 65],
+    pub sig1: &'a [u8; 65],
+}
+
+/// Encode the interleaved-chain court envelope:
+/// `turn_count(u16 LE) ‖ [tape_len(u16 LE) ‖ tape]×turn_count ‖ sig0(65) ‖ sig1(65)`.
+pub fn encode_court_envelope(tapes: &[&[u8]], sig0: &[u8; 65], sig1: &[u8; 65]) -> Vec<u8> {
+    let mut total = 2 + 65 + 65;
+    for t in tapes {
+        total += 2 + t.len();
+    }
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&(tapes.len() as u16).to_le_bytes());
+    for t in tapes {
+        out.extend_from_slice(&(t.len() as u16).to_le_bytes());
+        out.extend_from_slice(t);
+    }
+    out.extend_from_slice(sig0);
+    out.extend_from_slice(sig1);
+    out
+}
+
+/// Decode a court envelope. Returns `None` on any malformed input (truncation,
+/// overflow, or trailing bytes). Strict length closes a witness-malleability gap.
+pub fn decode_court_envelope(bytes: &[u8]) -> Option<CourtEnvelope<'_>> {
+    if bytes.len() < 2 {
+        return None;
+    }
+    let turn_count = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
+    let mut offset = 2usize;
+    let mut tapes = Vec::with_capacity(turn_count);
+    for _ in 0..turn_count {
+        let len_end = offset.checked_add(2)?;
+        if len_end > bytes.len() {
+            return None;
+        }
+        let tape_len = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+        offset = len_end;
+        let tape_end = offset.checked_add(tape_len)?;
+        if tape_end > bytes.len() {
+            return None;
+        }
+        tapes.push(&bytes[offset..tape_end]);
+        offset = tape_end;
+    }
+    let sig0_end = offset.checked_add(65)?;
+    if sig0_end > bytes.len() {
+        return None;
+    }
+    let sig0: &[u8; 65] = bytes[offset..sig0_end].try_into().ok()?;
+    offset = sig0_end;
+    let sig1_end = offset.checked_add(65)?;
+    if sig1_end > bytes.len() {
+        return None;
+    }
+    let sig1: &[u8; 65] = bytes[offset..sig1_end].try_into().ok()?;
+    offset = sig1_end;
+    // Strict length: reject any trailing bytes.
+    if offset != bytes.len() {
+        return None;
+    }
+    Some(CourtEnvelope { tapes, sig0, sig1 })
+}
+
 /// A single signed game turn extracted from the attested envelope.
 ///
 /// Borrows directly from the envelope byte slice — zero copy.
@@ -138,4 +220,56 @@ pub fn decode_attested(bytes: &[u8]) -> Option<Vec<AttestedBlock<'_>>> {
     }
 
     Some(blocks)
+}
+
+#[cfg(test)]
+mod court_chain_tests {
+    use super::*;
+
+    #[test]
+    fn genesis_is_deterministic_and_seed_sensitive() {
+        assert_eq!(court_chain_genesis(1234), court_chain_genesis(1234));
+        assert_ne!(court_chain_genesis(1234), court_chain_genesis(1235));
+    }
+
+    #[test]
+    fn step_is_sensitive_to_prev_idx_and_tape() {
+        let g = court_chain_genesis(1234);
+        let h0 = court_chain_step(&g, 0, &[1, 2, 3]);
+        assert_ne!(h0, g);
+        assert_ne!(h0, court_chain_step(&g, 1, &[1, 2, 3])); // idx matters
+        assert_ne!(h0, court_chain_step(&g, 0, &[1, 2, 4])); // tape matters
+        // chaining: a different prev head diverges
+        let h1a = court_chain_step(&h0, 1, &[9]);
+        let h1b = court_chain_step(&g, 1, &[9]);
+        assert_ne!(h1a, h1b);
+    }
+
+    #[test]
+    fn court_envelope_round_trips() {
+        let t0: &[u8] = &[0xaa, 0xbb];
+        let t1: &[u8] = &[0xcc];
+        let sig0 = [1u8; 65];
+        let sig1 = [2u8; 65];
+        let bytes = encode_court_envelope(&[t0, t1], &sig0, &sig1);
+        // header(2) + (2+2) + (2+1) + 65 + 65
+        assert_eq!(bytes.len(), 2 + 4 + 3 + 65 + 65);
+        let e = decode_court_envelope(&bytes).expect("decode");
+        assert_eq!(e.tapes, vec![t0, t1]);
+        assert_eq!(e.sig0, &sig0);
+        assert_eq!(e.sig1, &sig1);
+    }
+
+    #[test]
+    fn court_envelope_rejects_trailing_bytes() {
+        let mut bytes = encode_court_envelope(&[&[1u8]], &[0u8; 65], &[0u8; 65]);
+        bytes.push(0); // strict-length violation
+        assert!(decode_court_envelope(&bytes).is_none());
+    }
+
+    #[test]
+    fn court_envelope_rejects_truncation() {
+        let bytes = encode_court_envelope(&[&[1u8, 2]], &[0u8; 65], &[0u8; 65]);
+        assert!(decode_court_envelope(&bytes[..bytes.len() - 1]).is_none());
+    }
 }
