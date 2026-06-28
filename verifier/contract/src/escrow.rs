@@ -31,18 +31,17 @@
 //!
 //! # Court witness (`witness[0].lock`, GroupInput)
 //! ```text
-//! tag=1(1) ‖ nonce0(32) ‖ nonce1(32) ‖ attested_envelope(..)
+//! tag=1(1) ‖ nonce0(32) ‖ nonce1(32) ‖ [turn_count ‖ [tape_len‖tape]×n ‖ sig0(65) ‖ sig1(65)]
 //! ```
 //!
 //! # Algorithm
 //! 1. parse 145-byte args; parse the court witness.
 //! 2. `blake2b(nonceN, ckb-default-hash) == nonceN_commit` for both.
 //! 3. `seed = derive_seed(nonce0, nonce1)`.
-//! 4. `decode_attested(envelope)`; `w = create_world(seed, 1280, 720)`.
-//! 5. for each turn block i: recover the signer pubkey from `sig` over
-//!    `attest_message(seed, i, tape_bytes)`; assert `blake160(pubkey)` equals the
-//!    lockhash of the player whose team is active AT BLOCK START; then
-//!    `step_world` over EVERY tick of the block (no early GAMEOVER break).
+//! 4. `decode_court_envelope(envelope)`; `w = create_world(seed, 1280, 720)`.
+//! 5. re-derive the interleaved chain during replay; recover EXACTLY 2 signatures
+//!    (each player's final head) — constant in turn count; assert each recovered
+//!    blake160 matches the corresponding player's id.
 //! 6. read `w.winner` (0/1/-1); assert the tx outputs pay the pot to the
 //!    winner's id (or 50/50 split on -1) UNDER THE PINNED PAYOUT LOCK
 //!    (code_hash + hash_type + args all match).
@@ -73,7 +72,8 @@ mod contract {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use linked_list_allocator::Heap;
     use verifier::{
-        attest_message, create_world, decode_attested, decode_tape, derive_seed, step_world,
+        court_chain_genesis, court_chain_step, create_world, decode_court_envelope, decode_tape,
+        derive_seed, step_world,
     };
 
     // ---- Single-hart global heap (identical to the Phase-2 verifier-lock) ----
@@ -162,6 +162,7 @@ mod contract {
     const E_SINCE_NOT_ABSOLUTE: i8 = 22; // GroupInput since is not an absolute-block lock
     const E_BEFORE_DEADLINE: i8 = 23; // since < deadline_block
     const E_REFUND_PAYOUT: i8 = 24; // refund outputs do not cover the 50/50 split
+    const E_PLAYER_NO_TURNS: i8 = 25; // a player has zero active turns (no head to verify)
 
     const ID_LEN: usize = 20;
     const CODE_HASH_LEN: usize = 32;
@@ -467,62 +468,71 @@ mod contract {
 
         let seed = derive_seed(&nonce0, &nonce1);
 
-        let blocks = match decode_attested(envelope) {
-            Some(b) => b,
+        let env = match decode_court_envelope(envelope) {
+            Some(e) => e,
             None => return E_DECODE_ATTESTED,
         };
 
+        // Re-derive the interleaved chain during replay, tracking each player's
+        // FINAL head. M1: never panic on a malformed replay — fail closed.
         let mut world = create_world(seed, 1280, 720);
-        for (i, block) in blocks.iter().enumerate() {
-            // Expected actor = player who owns the active ape's team AT BLOCK START.
-            // M1: a malformed replay must never panic (a panicking lock = an
-            // unspendable cell / DoS); fail closed on an out-of-range index.
+        let mut head = court_chain_genesis(seed);
+        let mut last0: Option<[u8; 32]> = None;
+        let mut last1: Option<[u8; 32]> = None;
+        for (i, tape) in env.tapes.iter().enumerate() {
             let active_ape = match world.apes.get(world.active_ape as usize) {
                 Some(a) => a,
                 None => return E_ACTIVE_APE_OOB,
             };
             let active_team = active_ape.team;
-            let expected_id: &[u8] = if active_team == 0 {
-                player0_id
+            head = court_chain_step(&head, i as u32, tape);
+            if active_team == 0 {
+                last0 = Some(head);
             } else {
-                player1_id
-            };
-
-            let msg = attest_message(seed, i as u32, block.tape_bytes);
-            let recid = match RecoveryId::from_byte(block.sig[0]) {
-                Some(r) => r,
-                None => return E_SIG_RECOVER,
-            };
-            let signature = match Signature::from_slice(&block.sig[1..65]) {
-                Ok(s) => s,
-                Err(_) => return E_SIG_RECOVER,
-            };
-            let vk = match VerifyingKey::recover_from_prehash(&msg, &signature, recid) {
-                Ok(k) => k,
-                Err(_) => return E_SIG_RECOVER,
-            };
-            let point = vk.to_encoded_point(true); // 33-byte compressed
-            if blake160(point.as_bytes()) != expected_id {
-                return E_ACTOR_MISMATCH;
+                last1 = Some(head);
             }
-
             // Replay every tick of this turn (do NOT break early on GAMEOVER).
-            for input in decode_tape(block.tape_bytes) {
+            for input in decode_tape(tape) {
                 step_world(&mut world, &input);
             }
         }
+
+        let head0 = match last0 {
+            Some(h) => h,
+            None => return E_PLAYER_NO_TURNS,
+        };
+        let head1 = match last1 {
+            Some(h) => h,
+            None => return E_PLAYER_NO_TURNS,
+        };
 
         let winner = match world.winner {
             Some(w) => w,
             None => return E_NO_WINNER,
         };
 
+        // Exactly two recoveries — constant in turn count.
+        match recover_blake160(&head0, env.sig0) {
+            Some(id) => {
+                if id != player0_id {
+                    return E_ACTOR_MISMATCH;
+                }
+            }
+            None => return E_SIG_RECOVER,
+        }
+        match recover_blake160(&head1, env.sig1) {
+            Some(id) => {
+                if id != player1_id {
+                    return E_ACTOR_MISMATCH;
+                }
+            }
+            None => return E_SIG_RECOVER,
+        }
+
         let pot = match pot_capacity() {
             Ok(p) => p,
             Err(e) => return e,
         };
-        // The winner must receive the FULL pot under the pinned payout lock; the
-        // network fee therefore comes from a SEPARATE fee input (Plan B builder).
         let to0 = match paid_to(player0_id, payout_code_hash, payout_hash_type) {
             Ok(v) => v,
             Err(e) => return e,

@@ -7,4 +7,5 @@ p0_blake160=75178f34549c5fe9cd1a0c57aebd01e7ddf9249e
 p1_blake160=a3c778981c19e1dcc611fb2132dcdaac075a5064
 winner=1
 turns=23
-envelope_len=7421
+envelope_len=6056
+format=interleaved-chain-v1

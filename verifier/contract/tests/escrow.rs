@@ -26,7 +26,7 @@ use ckb_testtool::{
     context::Context,
 };
 use k256::ecdsa::SigningKey;
-use verifier::{create_world, decode_attested, decode_tape, derive_seed, step_world};
+use verifier::{create_world, decode_court_envelope, decode_tape, derive_seed, step_world};
 
 const ESCROW_BIN: &str = "target/riscv64imac-unknown-none-elf/release/escrow-lock";
 const POT: u64 = 100_000;
@@ -98,10 +98,10 @@ fn court_witness(n0: &[u8; 32], n1: &[u8; 32], env: &[u8]) -> Vec<u8> {
 
 /// Replay the attested envelope on the host to learn the real winner (0/1/-1).
 fn replay_winner(seed: i32, env: &[u8]) -> i64 {
-    let blocks = decode_attested(env).expect("decode_attested");
+    let e = decode_court_envelope(env).expect("decode_court_envelope");
     let mut w = create_world(seed, 1280, 720);
-    for b in &blocks {
-        for input in decode_tape(b.tape_bytes) {
+    for tape in &e.tapes {
+        for input in decode_tape(tape) {
             step_world(&mut w, &input);
         }
     }
