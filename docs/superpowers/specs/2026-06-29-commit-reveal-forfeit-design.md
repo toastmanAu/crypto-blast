@@ -43,9 +43,14 @@ active player **P**, with opponent **Q**:
 - `sig_P`/`sig_Q` are 65-byte recoverable secp256k1 sigs `[v‖r‖s]`, identical format to 4A.
 - Q cannot compute `Hᵢ` before the reveal (it needs `tapeᵢ`), so P **sends** the value
   `Hᵢ` in COMMIT; Q stores `(Hᵢ, sig_P)`. Validity of `Hᵢ` is checked at REVEAL.
-- **ACK's role:** it gives P assurance Q holds the commitment, and gives Q a record of
-  P's commitment to use in a forfeit/challenge. It is an off-chain liveness aid; the
-  on-chain forfeit relies on `sig_P` (the commit), not the ack — see §4.
+- **ACK's role (on-chain load-bearing):** the ack makes each completed head **mutually
+  signed** (active player's commit + opponent's ack over the same `Hᵢ`). This is
+  required by the forfeit path to **authenticate the prefix**: a head signed by only its
+  own author could be fabricated by that author to forge a prefix ending on their own
+  turn. Requiring both signatures on the last completed head means neither party can
+  unilaterally fake the agreed state (§4). The ack does not change 4A's court replay,
+  which still uses the single-signer interleaved chain — the mutual signature is an
+  additional per-turn artifact consumed only by the forfeit path.
 
 The **networked transport** of these messages (ordering enforcement, retries, peer
 timeouts) lives in the FiberQuest client and is **out of scope** (§5). This spec defines
@@ -77,16 +82,19 @@ escrow ──FORFEIT-CLAIM──▶ pending-forfeit cell ──┬─ADVANCE (ac
 
 ### FORFEIT-CLAIM (escrow-lock → pending-forfeit cell)
 The claimant (Q) posts:
-- the **revealed prefix** `tape₀..ₖ` (the last fully-completed, opponent-acknowledged turns),
+- the **revealed prefix** `tape₀..ₖ` (the last fully-completed turns),
+- the **last completed head** `Hₖ` with **both** signatures `sig_P(Hₖ) ‖ sig_Q(Hₖ)`
+  (the mutual commit+ack) — this **authenticates the prefix** (neither party can fake it),
 - optionally P's **commit** `Hᵢ ‖ sig_P(Hᵢ)` for the stalled turn `i = k+1` (shape-1:
   P committed but withheld; absent for shape-2: P produced nothing).
 
-On-chain: replay the prefix (≈ up to ~136M cycles, like court) to derive `Hₖ` and confirm
-the **active team at turn `k+1` is P's**; if a commit is supplied, verify `sig_P(Hᵢ)`
-recovers to P's id. Transition the escrow into a **pending-forfeit cell** holding the pot,
-args committing: player ids + payout pin, the claimant, the stalled turn index `k+1`, the
-supplied `Hᵢ` (or none), `Hₖ`, and `forfeit_deadline = claim_block + reveal_window`
-(funder-set, alongside `challenge_window`).
+On-chain: replay the prefix (≈ up to ~136M cycles, like court) to derive `Hₖ`; verify it
+equals the posted `Hₖ` **and that both `sig_P(Hₖ)` and `sig_Q(Hₖ)` recover to the two
+player ids** (prefix authenticated); confirm the **active team at turn `k+1` is P's**; if a
+commit is supplied, verify `sig_P(Hᵢ)` recovers to P's id. Transition the escrow into a
+**pending-forfeit cell** holding the pot, args committing: player ids + payout pin, the
+claimant id, the stalled turn index `k+1`, the supplied `Hᵢ` (or none), `Hₖ`, and
+`forfeit_deadline = claim_block + reveal_window` (funder-set, alongside `challenge_window`).
 
 ### ADVANCE (pending-forfeit cell → resume), by the active player P, before the deadline
 P spends the cell by **playing turn `k+1` on-chain**: posting `tape_{k+1}` (and, in shape-1,
