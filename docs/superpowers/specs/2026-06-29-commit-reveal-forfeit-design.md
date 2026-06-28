@@ -167,6 +167,16 @@ focused, independently-auditable surface; unification is a follow-up once both a
   resumption; confirm no party can cheaply force the opponent into repeated replay-heavy
   on-chain steps. Each FORFEIT-CLAIM costs the *claimant* the replay, so the cost falls on
   the griefer — but the implementation should verify this incentive holds end-to-end.
+- **Stale-state claim (griefing, not theft):** a claimant could FORFEIT-CLAIM with an
+  *older* mutual head `Hⱼ` (j < the real latest), asserting a stall at `j+1`. This is **not
+  a theft vector** — the stalled player defends by ADVANCEing the move they already made at
+  `j+1` (they hold it), and the eventual court claim over the full real transcript
+  supersedes. It is a *griefing* vector (forces a redundant on-chain round), bounded
+  because each stale claim costs the claimant a replay-heavy (~136M) tx. The cheap
+  mitigation — letting the defender **refute with a fresher mutual head** `Hₘ (m > j+1)`
+  instead of re-advancing move-by-move — is a **deferred optimization**, not built in the
+  first implementation. The first forfeit-lock is correct-but-griefable; the refute path is
+  a follow-up (and a natural part of the §6 interactive-settlement unification).
 - **Interaction with the challenge window:** an on-chain-advanced final move still enters
   the court claim → challenge flow; confirm the two windows compose without a gap (e.g. a
   forfeit ADVANCE feeding directly into a claim that is itself challengeable).
