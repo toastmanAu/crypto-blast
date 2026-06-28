@@ -578,11 +578,21 @@ fn rejects_trailing_bytes() {
     assert!(r.is_err(), "trailing bytes must reject (E_DECODE_ATTESTED)");
 }
 
-// RESIDUAL — final-move equivocation (see design §6). A player can end the match
-// on their OWN move (world.rs end_turn sets winner when a team hits 0 alive), and
-// that final move is signed only by its author, so a losing final-actor can
-// re-sign a fabricated winning final move. The court fixture is sub-case A
-// (winner lands the killing blow), so it CANNOT reproduce the exploit here; a
-// reproducing test requires a self-destruct fixture and is deferred to the
-// challenge-window follow-up. The refund path (tag 2, deadline split) bounds a
-// cheated winner's worst case to 50%. Tracked in ESCROW.md §8.
+// RESIDUAL — final-move equivocation (see ESCROW.md §8 / design spec §6). The
+// court fixture IS the loser-final-actor (self-destruct) shape: 23 turns, team0
+// acts last on turn 22 (even index), winner=1 (see fixture-court.meta.txt).
+// Player1's final-head signature covers only up to player1's last turn (turn 21)
+// and does NOT cover the final move (turn 22, player0's). This is exactly
+// sub-case B of the exploit — played honestly (team0's real final move
+// self-destructs, team1 wins legitimately).
+//
+// THE RESIDUAL: player0 (loser, final actor) could re-sign a forged winning or
+// drawing final move using their own key and submit it to the court. The court
+// has NO challenge window — it is first-valid-spend-wins (a RACE). An honest
+// winner's worst case is TOTAL LOSS: a winning forge takes 100% of the pot; a
+// drawing forge forces a 50/50 split. The refund path (tag 2, deadline split)
+// does NOT bound an active forger — it only protects against inaction.
+//
+// A reproducing exploit test (constructing a forged winning final move) and the
+// challenge-window fix are deferred to the follow-up. Tracked in ESCROW.md §8 /
+// design spec §6.

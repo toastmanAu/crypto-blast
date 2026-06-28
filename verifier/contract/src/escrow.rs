@@ -529,6 +529,7 @@ mod contract {
             None => return E_SIG_RECOVER,
         }
 
+        // The winner must receive the FULL pot under the pinned payout lock; the network fee therefore comes from a SEPARATE fee input (Plan B builder).
         let pot = match pot_capacity() {
             Ok(p) => p,
             Err(e) => return e,

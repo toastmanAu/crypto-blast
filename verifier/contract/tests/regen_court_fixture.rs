@@ -5,8 +5,9 @@
 //!
 //!   cargo test -p verifier-contract --test regen_court_fixture -- --ignored --nocapture
 //!
-//! (Replace `verifier-contract` with the contract crate's package name if different;
-//!  `cargo test --test regen_court_fixture -- --ignored` from the contract dir also works.)
+//! or from the contract directory:
+//!
+//!   cd verifier/contract && cargo test --test regen_court_fixture -- --ignored
 
 use k256::ecdsa::SigningKey;
 use verifier::{
