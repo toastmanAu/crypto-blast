@@ -26,7 +26,7 @@ use ckb_testtool::{
     context::Context,
 };
 use k256::ecdsa::SigningKey;
-use verifier::{create_world, decode_court_envelope, decode_tape, derive_seed, step_world};
+use verifier::{create_world, decode_court_envelope, decode_tape, derive_seed, encode_court_envelope, step_world};
 
 const ESCROW_BIN: &str = "target/riscv64imac-unknown-none-elf/release/escrow-lock";
 const POT: u64 = 100_000;
@@ -161,9 +161,10 @@ fn run_with_locks(
             .output_data(Bytes::new().pack());
     }
     let tx = ctx.complete_tx(tb.build());
-    // Court path runs replay (~heavier than verifier-lock) + N bundled-k256 secp
-    // recoveries; the 23-turn fixture measures ~278M cycles. 500M leaves headroom.
-    ctx.verify_tx(&tx, 500_000_000).map(|c| c as u64)
+    // Interleaved-chain court verifies 2 recoveries (constant in turn count),
+    // but the 23-turn match REPLAY (~136M) dominates: ~148M total (measured),
+    // down from ~278M (was 23 per-turn recoveries). Under the 200M per-tx ceiling.
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
 }
 
 /// Assemble + verify a court-path spend. `outputs` is a list of (recipient_id,
@@ -512,3 +513,76 @@ fn rejects_payout_to_winner_args_wrong_lock() {
         "payout to winner-args under an attacker-controlled lock must reject (prize-theft blocked)"
     );
 }
+
+#[test]
+fn rejects_swapped_final_sigs() {
+    // Swapping sig0/sig1 makes each recover to the WRONG player id.
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let e = decode_court_envelope(&env).expect("decode");
+    let swapped = encode_court_envelope(&e.tapes, e.sig1, e.sig0); // sigs swapped
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &swapped);
+    let r = run(args, wit, &[(p1.to_vec(), POT)]);
+    assert!(r.is_err(), "swapped final-head sigs must reject (E_ACTOR_MISMATCH)");
+}
+
+#[test]
+fn rejects_truncated_no_winner() {
+    // Dropping the final turn yields a non-terminal replay → no winner.
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let e = decode_court_envelope(&env).expect("decode");
+    let n = e.tapes.len();
+    let truncated = encode_court_envelope(&e.tapes[..n - 1], e.sig0, e.sig1);
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &truncated);
+    let r = run(args, wit, &[(p1.to_vec(), POT)]);
+    assert!(r.is_err(), "truncated match must reject (E_NO_WINNER)");
+}
+
+#[test]
+fn rejects_player_with_zero_turns() {
+    // A single-turn envelope leaves player1 with no head → E_PLAYER_NO_TURNS,
+    // checked BEFORE signature recovery (so dummy sigs are fine).
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let e = decode_court_envelope(&env).expect("decode");
+    let one = encode_court_envelope(&e.tapes[..1], &[0u8; 65], &[0u8; 65]);
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &one);
+    let r = run(args, wit, &[(p1.to_vec(), POT)]);
+    assert!(r.is_err(), "a player with zero turns must reject (E_PLAYER_NO_TURNS)");
+}
+
+#[test]
+fn rejects_trailing_bytes() {
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let mut env = court_envelope();
+    env.push(0u8); // strict-length violation
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &env);
+    let r = run(args, wit, &[(p1.to_vec(), POT)]);
+    assert!(r.is_err(), "trailing bytes must reject (E_DECODE_ATTESTED)");
+}
+
+// RESIDUAL — final-move equivocation (see design §6). A player can end the match
+// on their OWN move (world.rs end_turn sets winner when a team hits 0 alive), and
+// that final move is signed only by its author, so a losing final-actor can
+// re-sign a fabricated winning final move. The court fixture is sub-case A
+// (winner lands the killing blow), so it CANNOT reproduce the exploit here; a
+// reproducing test requires a self-destruct fixture and is deferred to the
+// challenge-window follow-up. The refund path (tag 2, deadline split) bounds a
+// cheated winner's worst case to 50%. Tracked in ESCROW.md §8.
