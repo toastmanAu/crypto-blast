@@ -175,7 +175,11 @@ and the builder requirements (separate fee input, canonical payout lock pin).
 
 **Phase 4A metrics (as-built):**
 - escrow-lock binary: 348,288 bytes (~340 KB, `riscv64imac-unknown-none-elf` release)
-- Court-path cycles: 277,676,630 (~278M) for a 23-turn fixture
+- Court-path cycles: 148,309,757 (~148M) for a 23-turn fixture (interleaved-chain
+  court, **2 recoveries** constant in turn count; ~1.35× under the 200M ceiling)
+  - Envelope: `turn_count ‖ [tape_len‖tape]×n ‖ sig0(65) ‖ sig1(65)` (~6056 bytes,
+    was 7421 with per-turn sigs)
+  - Cost is replay-dominated; scales with match length (ticks), not turn count
 - ckb-testtool: 10/10 escrow + 3/3 verify tests PASS
 - secp: bundled k256 (no dynamic-loading; no `secp256k1_data` dep cell required)
 - Testnet broadcast: manual Plan-B step (not yet performed)

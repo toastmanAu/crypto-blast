@@ -188,10 +188,10 @@ secp256k1 library.
   `riscv64imac-unknown-none-elf` with `-C target-feature=-a,+forced-atomics` and
   the dummy-atomic allocator already established by the verifier-lock contract.
 - **Trade-off:** larger binary (~340 KB vs ~188 KB verifier-lock) and higher
-  court-path cycles (~278M vs ~54M for the tape-only path) from pure-Rust scalar
+  court-path cycles (~148M vs ~54M for the tape-only path) from pure-Rust scalar
   multiplication without precomputed tables. Acceptable for correctness and
-  testability; a future optimization could switch to dynamic-loading for
-  mainnet deployment.
+  testability; at 2 recoveries (interleaved-chain court) this is now under the
+  200M mainnet ceiling, so dynamic-loading is no longer an urgent optimization.
 - **No `secp256k1_data` dep cell is required** — that is a ckb-std dynamic-loader
   dependency, not needed here.
 
@@ -260,19 +260,40 @@ is wrong and the court/happy/refund paths will all reject valid spends.
 | `lock.args` size | 145 bytes |
 | escrow-lock binary (`riscv64imac-unknown-none-elf`, release, ELF) | **348,288 bytes (~340 KB)** |
 | verifier-lock binary (Phase 2, for comparison) | 191,872 bytes (~188 KB) |
-| Court-path cycles (23-turn fixture, 23 secp recoveries, ckb-testtool) | **277,676,630 (~278M)** |
+| Court-path cycles (23-turn fixture, **2 secp recoveries**, ckb-testtool) | **148,309,757 (~148M)** |
 | Happy-path cycles | not measured (2 secp recoveries; much lower than court) |
 | Refund-path cycles | not measured (no secp; very low) |
-| Cycle limits | happy/refund well under the 200M mainnet per-tx limit; **court ~278M EXCEEDS 200M mainnet** (accepted under the 500M ckb-testtool ceiling) — see dynamic-loading optimization below |
+| Cycle limits | happy/refund well under the 200M mainnet per-tx limit; **court ~148M fits under 200M** (~1.35× headroom; replay-dominated — scales with match ticks, not turn count) |
 | secp implementation | k256 0.13 bundled (no_std, no precomputed tables) |
 | Court fixture turns | 23 (synthetic self-destruct match, seed=1234, winner=player1) |
 
-> The court cycle cost scales with turn count. A longer match will proportionally
-> increase the count (each turn adds one secp recovery + the per-tick step_world
-> calls). The 278M figure is for 23 turns; the ckb-testtool cycle limit was set
-> to 500M to allow longer matches. If mainnet deployment requires lower cycle
-> counts, switching to dynamic-loading the consensus secp256k1 recovery lib is
-> the primary lever.
+> Court now verifies exactly **2 secp256k1 recoveries** (constant, independent of
+> turn count). The `~148M` figure is for the 23-turn fixture; cost is now
+> **replay-dominated** — it scales with match length (ticks) rather than turn
+> count. Witness envelope: `turn_count (u16 LE) ‖ [tape_len (u16 LE) ‖ tape]×n
+> ‖ sig0 (65) ‖ sig1 (65)` (~6056 bytes for the 23-turn fixture, was 7421 with
+> per-turn sigs). The dynamic-loading secp optimization is no longer the primary
+> lever; at 2 recoveries the bundled-k256 cost fits under 200M.
+
+### Residual — Final-Move Equivocation (Deferred)
+
+The final turn of a match has no successor, so only its author signs the chain
+head that commits to it. If the loser happens to act last, they can submit a
+**rewritten, self-signed** final move; the court path cannot distinguish it from
+the real move because no opponent signature covers that final turn.
+
+**Why it is bounded, not catastrophic:** a cheated winner's worst case is the
+**50/50 refund** after `deadline_block` (tag 2) — not total loss. The exploitable
+case is also narrow: it only arises when the loser acts last *and* a winning move
+was available from that position.
+
+**Why not a cheap co-sign fix:** requiring the loser to co-sign the final head
+would let a sore loser withhold their signature on every legitimate killing blow,
+dragging honest 100%-wins to 50% refunds — a worse outcome.
+
+**Future fix:** an interactive challenge window (the honest winner submits the
+loser's two conflicting signatures to slash them). Tracked as a separate
+follow-up spec. This spec does **not** claim the court path is fully theft-proof.
 
 ---
 
