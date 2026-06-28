@@ -203,3 +203,27 @@ import { tapeToBytes } from '../src/sim/tapeBinary';
   console.log(`  player0 lockhash: ${toHex20(blake160(player0Pub))}`);
   console.log(`  player1 lockhash: ${toHex20(blake160(player1Pub))}`);
 }
+
+// Court interleaved-chain head golden: derived from the regenerated court
+// fixture's tapes, so the Rust court chain can be proven byte-identical (Task 5).
+import { courtChainGenesis, courtChainStep } from '../src/sim/attest';
+{
+  const env = readFileSync('verifier/tests/fixture-court.bin');
+  const dv = new DataView(env.buffer, env.byteOffset, env.byteLength);
+  const n = dv.getUint16(0, true);
+  let off = 2;
+  const tapes: Uint8Array[] = [];
+  for (let i = 0; i < n; i++) {
+    const len = dv.getUint16(off, true); off += 2;
+    tapes.push(new Uint8Array(env.subarray(off, off + len))); off += len;
+  }
+  const SEED = 1234;
+  const hex = (b: Uint8Array): string =>
+    Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
+  let head = courtChainGenesis(SEED);
+  const lines = [hex(head)];           // line 0: genesis head
+  tapes.forEach((t, i) => { head = courtChainStep(head, i, t); });
+  lines.push(hex(head));               // line 1: final fold head over all turns
+  writeFileSync('verifier/tests/fixture-court-heads.txt', lines.join('\n'));
+  console.log(`exported fixture-court-heads.txt (${n} turns)`);
+}

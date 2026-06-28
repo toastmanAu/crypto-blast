@@ -302,3 +302,23 @@ fn seed_and_attested_tape_match_ts() {
     assert!(!commitment.is_empty(), "commitment should be non-empty");
     assert!(!blocks.is_empty(), "blocks should be non-empty");
 }
+
+#[test]
+fn court_chain_heads_match_ts() {
+    use verifier::{court_chain_genesis, court_chain_step, decode_court_envelope};
+    fn hx(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{:02x}", x)).collect()
+    }
+    let env = std::fs::read("tests/fixture-court.bin").expect("fixture-court.bin");
+    let e = decode_court_envelope(&env).expect("decode court envelope");
+    let golden = std::fs::read_to_string("tests/fixture-court-heads.txt").expect("heads golden");
+    let mut lines = golden.lines();
+
+    let seed = 1234i32;
+    let mut head = court_chain_genesis(seed);
+    assert_eq!(hx(&head), lines.next().unwrap().trim(), "genesis head must match TS");
+    for (i, tape) in e.tapes.iter().enumerate() {
+        head = court_chain_step(&head, i as u32, tape);
+    }
+    assert_eq!(hx(&head), lines.next().unwrap().trim(), "final fold head must match TS");
+}
