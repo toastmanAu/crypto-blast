@@ -282,10 +282,21 @@ head that commits to it. If the loser happens to act last, they can submit a
 **rewritten, self-signed** final move; the court path cannot distinguish it from
 the real move because no opponent signature covers that final turn.
 
-**Why it is bounded, not catastrophic:** a cheated winner's worst case is the
-**50/50 refund** after `deadline_block` (tag 2) — not total loss. The exploitable
-case is also narrow: it only arises when the loser acts last *and* a winning move
-was available from that position.
+**Worst case is total loss, not 50/50.** The court path is
+**first-valid-spend-wins** — there is no challenge window. Both parties would race
+to spend the same escrow cell, so this is a **submission race**. Sub-cases when
+the loser acts last and a better final move was reachable:
+
+- *Winning alt-move available* → forger steals the **full pot (100%)**; honest
+  winner gets **0** if the forger wins the race.
+- *Only a drawing alt-move available* → forger forces a **50/50** split; honest
+  winner keeps half.
+
+The refund path (tag 2) does **not** bound this: a forger's court spend consumes
+the escrow cell before `deadline_block`, so no refund can fire. The refund applies
+only when **neither** party submits a court tx at all. The exploitable sub-case
+arises when the loser acts last *and* a better move was available from that
+position.
 
 **Why not a cheap co-sign fix:** requiring the loser to co-sign the final head
 would let a sore loser withhold their signature on every legitimate killing blow,

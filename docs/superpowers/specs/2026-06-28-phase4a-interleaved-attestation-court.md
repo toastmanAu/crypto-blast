@@ -180,8 +180,17 @@ legitimate killing blow drags honest 100% wins to a 50% refund). The correct fix
 is an **interactive challenge window** (the honest winner submits the loser's two
 conflicting signatures to slash them), tracked as a separate follow-up.
 
-**Safety net:** the residual is bounded by the refund path — a cheated winner's
-worst case is the 50/50 refund after `deadline_block` (tag 2), not total loss.
+**No safety net — worst case is total loss.** The court path is
+first-valid-spend-wins (no challenge window yet): both parties race to spend the
+same escrow cell. Sub-cases when the loser acts last:
+
+- *Winning alt-move available* → forger steals the **full pot (100%)**; honest
+  winner gets **0** if the forger wins the race.
+- *Only a drawing alt-move available* → forger forces a **50/50** split.
+
+The refund path (tag 2) does **not** bound an active forger — a court spend
+consumes the escrow cell before `deadline_block`, so no refund can fire. Refund
+only applies when neither party submits a court tx at all.
 
 This spec therefore does **not** claim the court path is fully theft-proof.
 
