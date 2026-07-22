@@ -5,12 +5,17 @@
 //! load-bearing **court** path (tag=1): a trustless on-chain replay that
 //! adjudicates a disputed match and binds the payout to the real winner.
 //!
-//! # `lock.args` (145 bytes)
+//! # `lock.args` (186 bytes)
 //! ```text
 //! expected_payout_code_hash(32) ‖ expected_payout_hash_type(1) ‖
 //! player0_id(20) ‖ player1_id(20) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖
-//! deadline_block(8 LE)
+//! deadline_block(8 LE) ‖ reveal_window(8 LE) ‖
+//! forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)
 //! ```
+//! `reveal_window` (funder-set) and the `forfeit_lock_*` PIN are consumed ONLY by
+//! the forfeit-claim path (tag=3); the happy/court/refund paths ignore them. The
+//! forfeit pin binds the pending-forfeit output cell's lock SCRIPT (code_hash +
+//! hash_type) — see Path 3 below.
 //! `playerN_id` is the player's **blake160** (first 20 bytes of
 //! `blake2b256(compressed_pubkey, "ckb-default-hash")`) — the secp256k1-blake160
 //! lock-arg convention. It serves as BOTH the move-signature identity AND the
@@ -35,7 +40,7 @@
 //! ```
 //!
 //! # Algorithm
-//! 1. parse 145-byte args; parse the court witness.
+//! 1. parse 186-byte args; parse the court witness.
 //! 2. `blake2b(nonceN, ckb-default-hash) == nonceN_commit` for both.
 //! 3. `seed = derive_seed(nonce0, nonce1)`.
 //! 4. `decode_court_envelope(envelope)`; `w = create_world(seed, 1280, 720)`.
@@ -47,14 +52,33 @@
 //!    (code_hash + hash_type + args all match).
 //! 7. exit 0 iff all hold; distinct nonzero codes otherwise.
 //!
+//! # Path 3 — FORFEIT-CLAIM (tag=3) → pending-forfeit cell
+//! Witness lock: `tag=3(1) ‖ nonce0(32) ‖ nonce1(32) ‖ evidence_body`, where
+//! `evidence_body` is decoded by `verifier::decode_forfeit_evidence` (the mutually
+//! signed match PREFIX + optionally the stalled player's withheld commit). The
+//! lock authenticates the prefix (replay head == posted `head_k`; both sigs
+//! recover to exactly `{p0, p1}`), requires the match to still be in progress,
+//! attributes the stalled player by `team-of-turn = prefix_len % 2`, and
+//! transitions the pot into a **pending-forfeit cell** locked by the pinned
+//! forfeit-lock. That cell's 316-byte args embed the escrow-lock's OWN
+//! code_hash+hash_type (PIN for Task 5's fresh escrow cell) and the ORIGINAL
+//! escrow args VERBATIM, so CR Task 5's ADVANCE can re-emit the escrow cell
+//! byte-for-byte. See `forfeit_claim` for the full fail-closed check list.
+//!
 //! secp256k1 recovery is bundled (k256) rather than dynamic-loaded — see
 //! Cargo.toml + task-4-report.md.
 
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
 
+// `no_std` contract: pull in the `alloc` crate for `Vec` (used by the
+// forfeit-claim path to assemble the expected pending-forfeit args blob).
+#[cfg(target_arch = "riscv64")]
+extern crate alloc;
+
 #[cfg(target_arch = "riscv64")]
 mod contract {
+    use alloc::vec::Vec;
     use blake2b_ref::Blake2bBuilder;
     use ckb_std::{
         ckb_constants::Source,
@@ -72,8 +96,8 @@ mod contract {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use linked_list_allocator::Heap;
     use verifier::{
-        court_chain_genesis, court_chain_step, create_world, decode_court_envelope, decode_tape,
-        derive_seed, step_world,
+        court_chain_genesis, court_chain_step, create_world, decode_court_envelope,
+        decode_forfeit_evidence, decode_tape, derive_seed, step_world,
     };
 
     // ---- Single-hart global heap (identical to the Phase-2 verifier-lock) ----
@@ -164,12 +188,29 @@ mod contract {
     const E_REFUND_PAYOUT: i8 = 24; // refund outputs do not cover the 50/50 split
     const E_PLAYER_NO_TURNS: i8 = 25; // a player has zero active turns (no head to verify)
 
+    // ---- Path 3 (forfeit-claim → pending-forfeit cell) ----
+    const E_FORFEIT_DECODE: i8 = 26; // decode_forfeit_evidence failed / witness too short
+    const E_FORFEIT_PREFIX: i8 = 27; // prefix replay head != posted head_k
+    const E_FORFEIT_MUTUAL: i8 = 28; // sig_a/sig_b don't recover to exactly {p0,p1}
+    const E_FORFEIT_MATCH_OVER: i8 = 29; // prefix already has a winner (settle via court)
+    const E_FORFEIT_COMMIT_SIG: i8 = 30; // shape-1 commit not signed by the stalled player
+    const E_FORFEIT_OUTPUT: i8 = 31; // pending-forfeit output malformed / wrong lock / underfunded
+
     const ID_LEN: usize = 20;
     const CODE_HASH_LEN: usize = 32;
     const HASH_TYPE_LEN: usize = 1;
     // expected_payout_code_hash(32) ‖ hash_type(1) ‖ p0(20) ‖ p1(20)
-    //   ‖ commit0(32) ‖ commit1(32) ‖ deadline(8) = 145
-    const ARGS_LEN: usize = CODE_HASH_LEN + HASH_TYPE_LEN + ID_LEN * 2 + 32 * 2 + 8; // 145
+    //   ‖ commit0(32) ‖ commit1(32) ‖ deadline(8) ‖ reveal_window(8)
+    //   ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1) = 186
+    const ARGS_LEN: usize =
+        CODE_HASH_LEN + HASH_TYPE_LEN + ID_LEN * 2 + 32 * 2 + 8 + 8 + CODE_HASH_LEN + HASH_TYPE_LEN; // 186
+
+    // Pending-forfeit cell `lock.args` (layout B, consumed by CR Task 5):
+    // escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(186, VERBATIM)
+    //   ‖ claimant_id(20) ‖ stalled_idx(4 LE) ‖ head_k(32) ‖ committed_head(32)
+    //   ‖ has_commit(1) ‖ forfeit_deadline(8 LE) = 316
+    const PENDING_FORFEIT_ARGS_LEN: usize =
+        CODE_HASH_LEN + HASH_TYPE_LEN + ARGS_LEN + ID_LEN + 4 + 32 + 32 + 1 + 8; // 316
 
     fn ckb_blake2b(input: &[u8]) -> [u8; 32] {
         let mut h = Blake2bBuilder::new(32)
@@ -380,6 +421,201 @@ mod contract {
         }
     }
 
+    /// Path 3 — FORFEIT-CLAIM (tag=3) → pending-forfeit cell.
+    ///
+    /// Witness lock layout: `tag=3(1) ‖ nonce0(32) ‖ nonce1(32) ‖ evidence_body`,
+    /// where `evidence_body` decodes via `decode_forfeit_evidence` into the
+    /// mutually-signed match PREFIX (the last fully-completed turns) plus, for
+    /// shape 1, the stalled player's withheld commit. The claimant authenticates
+    /// the prefix and transitions the pot into a pending-forfeit cell locked by
+    /// the pinned forfeit-lock (resolved by the forfeit-lock script in CR Task 5).
+    ///
+    /// `script_code_hash`/`script_hash_type` are the escrow-lock's OWN identity
+    /// (from `load_script()`); `args` is the full 186-byte escrow `lock.args`.
+    /// Both are embedded VERBATIM into the pending-forfeit cell's args so Task 5's
+    /// ADVANCE can re-emit the escrow cell byte-for-byte (the escrow→forfeit→escrow
+    /// round-trip pin). Every check fails closed; no panics on malformed input.
+    #[allow(clippy::too_many_arguments)]
+    fn forfeit_claim(
+        lock: &[u8],
+        script_code_hash: &[u8],
+        script_hash_type: u8,
+        args: &[u8],
+        p0: &[u8],
+        p1: &[u8],
+        commit0: &[u8],
+        commit1: &[u8],
+        reveal_window: u64,
+        forfeit_code_hash: &[u8],
+        forfeit_hash_type: u8,
+    ) -> i8 {
+        // 1. Witness shape: tag(1) ‖ nonce0(32) ‖ nonce1(32) ‖ evidence_body.
+        if lock.len() < 1 + 32 + 32 {
+            return E_FORFEIT_DECODE;
+        }
+        let nonce0: [u8; 32] = match lock[1..33].try_into() {
+            Ok(n) => n,
+            Err(_) => return E_FORFEIT_DECODE,
+        };
+        let nonce1: [u8; 32] = match lock[33..65].try_into() {
+            Ok(n) => n,
+            Err(_) => return E_FORFEIT_DECODE,
+        };
+        let evidence_body = &lock[65..];
+
+        // 2. Nonce commits + seed (reuse the court path's nonce logic).
+        if ckb_blake2b(&nonce0) != commit0 {
+            return E_NONCE0_COMMIT;
+        }
+        if ckb_blake2b(&nonce1) != commit1 {
+            return E_NONCE1_COMMIT;
+        }
+        let seed = derive_seed(&nonce0, &nonce1);
+
+        // 3. Decode the forfeit evidence (strict; rejects trailing bytes).
+        let evidence = match decode_forfeit_evidence(evidence_body) {
+            Some(e) => e,
+            None => return E_FORFEIT_DECODE,
+        };
+
+        // 4. Authenticate the prefix (replay). Re-derive the chain head AND replay
+        //    EVERY tick of EVERY turn (do NOT break early on GAMEOVER), guarding the
+        //    active-ape index exactly like the court path (M1: fail closed on OOB).
+        let mut world = create_world(seed, 1280, 720);
+        let mut head = court_chain_genesis(seed);
+        for (i, tape) in evidence.prefix_tapes.iter().enumerate() {
+            if world.apes.get(world.active_ape as usize).is_none() {
+                return E_ACTIVE_APE_OOB;
+            }
+            head = court_chain_step(&head, i as u32, tape);
+            for input in decode_tape(tape) {
+                step_world(&mut world, &input);
+            }
+        }
+        if head != *evidence.head_k {
+            return E_FORFEIT_PREFIX;
+        }
+
+        // 5. Match still in progress — a finished match settles via the court path,
+        //    not forfeit.
+        if world.winner.is_some() {
+            return E_FORFEIT_MATCH_OVER;
+        }
+
+        // 6. Mutual head (order-independent): both sigs must recover and together
+        //    cover EXACTLY {p0, p1}.
+        let ida = match recover_blake160(evidence.head_k, evidence.sig_a) {
+            Some(id) => id,
+            None => return E_FORFEIT_MUTUAL,
+        };
+        let idb = match recover_blake160(evidence.head_k, evidence.sig_b) {
+            Some(id) => id,
+            None => return E_FORFEIT_MUTUAL,
+        };
+        let covers = (ida.as_ref() == p0 && idb.as_ref() == p1)
+            || (ida.as_ref() == p1 && idb.as_ref() == p0);
+        if !covers {
+            return E_FORFEIT_MUTUAL;
+        }
+
+        // 7. Identify the stalled player + claimant (NO replay needed). Team-of-turn
+        //    = idx % 2 while the match continues (Global Constraint): the stalled
+        //    player is whoever would act on turn `prefix_len`.
+        let stalled_idx = evidence.prefix_tapes.len() as u32;
+        let stalled_team = stalled_idx % 2;
+        let (stalled_player_id, claimant_id): (&[u8], &[u8]) = if stalled_team == 0 {
+            (p0, p1)
+        } else {
+            (p1, p0)
+        };
+
+        // 8. Shape-1 commit check: the withheld commit must be signed by the stalled
+        //    player. (shape == 2 = never-committed — nothing to check.)
+        if evidence.shape == 1 {
+            let committed_head = match evidence.committed_head {
+                Some(h) => h,
+                None => return E_FORFEIT_COMMIT_SIG,
+            };
+            let commit_sig = match evidence.commit_sig {
+                Some(s) => s,
+                None => return E_FORFEIT_COMMIT_SIG,
+            };
+            match recover_blake160(committed_head, commit_sig) {
+                Some(id) => {
+                    if id.as_ref() != stalled_player_id {
+                        return E_FORFEIT_COMMIT_SIG;
+                    }
+                }
+                None => return E_FORFEIT_COMMIT_SIG,
+            }
+        }
+
+        // 9. Claim since → deadline. The GroupInput since must be an ABSOLUTE BLOCK
+        //    NUMBER lock (top byte zero), exactly like the refund path.
+        let since = match load_input_since(0, Source::GroupInput) {
+            Ok(s) => s,
+            Err(_) => return E_SYSCALL,
+        };
+        if (since >> 56) != 0 {
+            return E_SINCE_NOT_ABSOLUTE;
+        }
+        let forfeit_deadline = since.saturating_add(reveal_window);
+
+        // 10. Validate the pending-forfeit output cell. Build the expected 316-byte
+        //     args blob (layout B) and require the SUM of capacities of outputs whose
+        //     lock is EXACTLY the pinned forfeit-lock (code_hash + hash_type) AND whose
+        //     args == expected blob (byte-exact) to be >= pot.
+        let has_commit: u8 = if evidence.shape == 1 { 1 } else { 0 };
+        let committed_head_bytes: [u8; 32] = match evidence.committed_head {
+            Some(h) => *h,
+            None => [0u8; 32],
+        };
+        let mut expected = Vec::with_capacity(PENDING_FORFEIT_ARGS_LEN);
+        expected.extend_from_slice(script_code_hash); // [0..32]    escrow code_hash (PIN)
+        expected.push(script_hash_type); // [32]       escrow hash_type
+        expected.extend_from_slice(args); // [33..219]  escrow args VERBATIM (186)
+        expected.extend_from_slice(claimant_id); // [219..239] claimant_id (20)
+        expected.extend_from_slice(&stalled_idx.to_le_bytes()); // [239..243] stalled_idx (4 LE)
+        expected.extend_from_slice(evidence.head_k); // [243..275] head_k (32)
+        expected.extend_from_slice(&committed_head_bytes); // [275..307] committed_head (32; zeros if none)
+        expected.push(has_commit); // [307]      has_commit (1)
+        expected.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [308..316] deadline (8 LE)
+
+        let pot = match pot_capacity() {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let mut covered: u64 = 0;
+        let mut i = 0;
+        loop {
+            let out_lock = match load_cell_lock(i, Source::Output) {
+                Ok(s) => s,
+                Err(SysError::IndexOutOfBound) => break,
+                Err(_) => return E_SYSCALL,
+            };
+            let code_hash = out_lock.code_hash();
+            let hash_type: u8 = out_lock.hash_type().into();
+            let out_args = out_lock.args().raw_data();
+            if code_hash.raw_data().as_ref() == forfeit_code_hash
+                && hash_type == forfeit_hash_type
+                && out_args.len() == expected.len()
+                && out_args.as_ref() == expected.as_slice()
+            {
+                match load_cell_capacity(i, Source::Output) {
+                    Ok(c) => covered = covered.saturating_add(c),
+                    Err(SysError::IndexOutOfBound) => break,
+                    Err(_) => return E_SYSCALL,
+                }
+            }
+            i += 1;
+        }
+        if covered >= pot {
+            0
+        } else {
+            E_FORFEIT_OUTPUT
+        }
+    }
+
     fn program_entry() -> i8 {
         // SAFETY: single-threaded; HEAP initialised once before any allocation.
         unsafe {
@@ -440,6 +676,32 @@ mod contract {
                 payout_code_hash,
                 payout_hash_type,
                 deadline_block,
+            );
+        }
+        if tag == 3 {
+            // Path 3 — FORFEIT-CLAIM (prefix → pending-forfeit cell).
+            // reveal_window = args[145..153] LE u64; forfeit pin = args[153..185] ‖ args[185].
+            let mut rw = [0u8; 8];
+            rw.copy_from_slice(&args[145..153]);
+            let reveal_window = u64::from_le_bytes(rw);
+            let forfeit_code_hash = &args[153..185];
+            let forfeit_hash_type = args[185];
+            // The escrow-lock's OWN identity (PIN embedded in the pending-forfeit
+            // cell so CR Task 5's ADVANCE can re-emit this escrow cell verbatim).
+            let script_code_hash = script.code_hash().raw_data();
+            let script_hash_type: u8 = script.hash_type().into();
+            return forfeit_claim(
+                &lock,
+                script_code_hash.as_ref(),
+                script_hash_type,
+                &args,
+                player0_id,
+                player1_id,
+                commit0,
+                commit1,
+                reveal_window,
+                forfeit_code_hash,
+                forfeit_hash_type,
             );
         }
         if tag != 1 {

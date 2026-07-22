@@ -26,7 +26,10 @@ use ckb_testtool::{
     context::Context,
 };
 use k256::ecdsa::SigningKey;
-use verifier::{create_world, decode_court_envelope, decode_tape, derive_seed, encode_court_envelope, step_world};
+use verifier::{
+    court_chain_genesis, court_chain_step, create_world, decode_court_envelope, decode_tape,
+    derive_seed, encode_court_envelope, step_world,
+};
 
 const ESCROW_BIN: &str = "target/riscv64imac-unknown-none-elf/release/escrow-lock";
 const POT: u64 = 100_000;
@@ -45,6 +48,21 @@ const HASH_TYPE_DATA1: u8 = 2;
 /// recipient outputs use and that gets embedded in the escrow args.
 fn payout_lock_identity() -> ([u8; 32], u8) {
     (verifier::ckbhash(RECIPIENT_LOCK_CODE), HASH_TYPE_DATA1)
+}
+
+/// The dummy forfeit-lock code. Like the recipient lock, its body is irrelevant
+/// (output locks never execute); only its IDENTITY is pinned in the escrow args
+/// (args[153..186]) and checked against the pending-forfeit output cell's lock.
+const FORFEIT_LOCK_CODE: &[u8] = b"crypto-blast-forfeit-lock";
+
+/// The funder-set reveal window embedded in the escrow args (args[145..153]).
+/// forfeit_deadline = claim_since + REVEAL_WINDOW.
+const REVEAL_WINDOW: u64 = 100;
+
+/// The pinned forfeit-lock identity (code_hash, hash_type byte) that the
+/// pending-forfeit output cell uses and that gets embedded in the escrow args.
+fn forfeit_lock_identity() -> ([u8; 32], u8) {
+    (verifier::ckbhash(FORFEIT_LOCK_CODE), HASH_TYPE_DATA1)
 }
 
 /// The two revealing nonces. `nonce0` is the brute-forced counter (LE) whose
@@ -69,12 +87,15 @@ fn court_envelope() -> Vec<u8> {
     std::fs::read("../tests/fixture-court.bin").expect("fixture-court.bin")
 }
 
-/// Build the 145-byte escrow args:
+/// Build the 186-byte escrow args:
 /// `payout_code_hash(32) ‖ payout_hash_type(1) ‖ p0(20) ‖ p1(20)
-///  ‖ c0(32) ‖ c1(32) ‖ deadline(8)`.
+///  ‖ c0(32) ‖ c1(32) ‖ deadline(8) ‖ reveal_window(8)
+///  ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)`.
+/// The happy/court/refund paths ignore the trailing reveal_window + forfeit pin.
 fn build_args(p0: &[u8; 20], p1: &[u8; 20], c0: &[u8; 32], c1: &[u8; 32]) -> Vec<u8> {
     let (payout_code_hash, payout_hash_type) = payout_lock_identity();
-    let mut a = Vec::with_capacity(145);
+    let (forfeit_code_hash, forfeit_hash_type) = forfeit_lock_identity();
+    let mut a = Vec::with_capacity(186);
     a.extend_from_slice(&payout_code_hash);
     a.push(payout_hash_type);
     a.extend_from_slice(p0);
@@ -82,7 +103,10 @@ fn build_args(p0: &[u8; 20], p1: &[u8; 20], c0: &[u8; 32], c1: &[u8; 32]) -> Vec
     a.extend_from_slice(c0);
     a.extend_from_slice(c1);
     a.extend_from_slice(&0u64.to_le_bytes()); // deadline (unused on court path)
-    assert_eq!(a.len(), 145, "escrow args must be 145 bytes");
+    a.extend_from_slice(&REVEAL_WINDOW.to_le_bytes()); // reveal_window (forfeit path)
+    a.extend_from_slice(&forfeit_code_hash); // forfeit-lock PIN (forfeit path)
+    a.push(forfeit_hash_type);
+    assert_eq!(a.len(), 186, "escrow args must be 186 bytes");
     a
 }
 
@@ -293,7 +317,7 @@ fn sign_recoverable(key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
     out
 }
 
-/// 145-byte escrow args with an explicit `deadline_block` (refund path reads it;
+/// 186-byte escrow args with an explicit `deadline_block` (refund path reads it;
 /// happy/court ignore it). Commits are zero — happy/refund don't use them.
 fn build_args_deadline(
     p0: &[u8; 20],
@@ -303,10 +327,15 @@ fn build_args_deadline(
     deadline: u64,
 ) -> Vec<u8> {
     let mut a = build_args(p0, p1, c0, c1);
-    // Overwrite the trailing 8-byte deadline (build_args wrote 0).
+    // Overwrite the 8-byte deadline at [137..145] (build_args wrote 0), then
+    // re-append reveal_window + forfeit pin so the args stay 186 bytes.
     a.truncate(137);
     a.extend_from_slice(&deadline.to_le_bytes());
-    assert_eq!(a.len(), 145);
+    let (forfeit_code_hash, forfeit_hash_type) = forfeit_lock_identity();
+    a.extend_from_slice(&REVEAL_WINDOW.to_le_bytes());
+    a.extend_from_slice(&forfeit_code_hash);
+    a.push(forfeit_hash_type);
+    assert_eq!(a.len(), 186);
     a
 }
 
@@ -576,6 +605,271 @@ fn rejects_trailing_bytes() {
     let wit = court_witness(&n0, &n1, &env);
     let r = run(args, wit, &[(p1.to_vec(), POT)]);
     assert!(r.is_err(), "trailing bytes must reject (E_DECODE_ATTESTED)");
+}
+
+// ===========================================================================
+// Path 3 — FORFEIT-CLAIM (tag=3 → pending-forfeit cell)
+// ===========================================================================
+
+/// A built forfeit-claim scenario: everything `run_forfeit_claim` needs to assemble
+/// the tag-3 spend AND to reconstruct the expected 316-byte pending-forfeit blob.
+struct ForfeitSetup {
+    /// 186-byte escrow `lock.args`.
+    args: Vec<u8>,
+    /// tag-3 witness lock: `tag(1) ‖ nonce0(32) ‖ nonce1(32) ‖ evidence_body`.
+    witness_lock: Vec<u8>,
+    /// The mutually-signed last completed head (folded over the prefix).
+    head_k: [u8; 32],
+    /// `prefix_tapes.len()` — the stalled turn index.
+    stalled_idx: u32,
+    /// The non-stalled player (the claimant).
+    claimant_id: [u8; 20],
+    /// The withheld commit head (zeros for shape 2).
+    committed_head: [u8; 32],
+    /// 1 = shape 1 (committed-withheld), 0 = shape 2 (never-committed).
+    has_commit: u8,
+}
+
+/// Build the shape-2 forfeit-evidence wire manually (mirrors CR Task 3's decode
+/// test): `turn_count(u16 LE) ‖ [tape_len(u16 LE)‖tape]×N ‖ head_k(32) ‖
+/// sig_a(65) ‖ sig_b(65) ‖ shape(2)`.
+fn build_forfeit_evidence_shape2(
+    tapes: &[&[u8]],
+    head_k: &[u8; 32],
+    sig_a: &[u8],
+    sig_b: &[u8],
+) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(tapes.len() as u16).to_le_bytes());
+    for t in tapes {
+        b.extend_from_slice(&(t.len() as u16).to_le_bytes());
+        b.extend_from_slice(t);
+    }
+    b.extend_from_slice(head_k);
+    b.extend_from_slice(sig_a);
+    b.extend_from_slice(sig_b);
+    b.push(2u8); // shape 2 (never-committed)
+    b
+}
+
+/// Build the tag-3 witness lock: `tag(1) ‖ nonce0 ‖ nonce1 ‖ evidence_body`.
+fn forfeit_witness(n0: &[u8; 32], n1: &[u8; 32], evidence_body: &[u8]) -> Vec<u8> {
+    let mut w = Vec::with_capacity(1 + 64 + evidence_body.len());
+    w.push(3u8); // tag = 3 (forfeit-claim)
+    w.extend_from_slice(n0);
+    w.extend_from_slice(n1);
+    w.extend_from_slice(evidence_body);
+    w
+}
+
+/// Build a forfeit-claim scenario from the first `n` tapes of the court fixture.
+/// Folds the mutually-signed head `head_k` over the prefix, signs it with `key_a`
+/// + `key_b`, and emits a shape-2 evidence body. The stalled player is attributed
+/// by `team-of-turn = n % 2`; the claimant is the other player.
+fn forfeit_claim_setup_keys(n: usize, key_a: &SigningKey, key_b: &SigningKey) -> ForfeitSetup {
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let seed = derive_seed(&n0, &n1);
+    assert_eq!(seed, 1234, "nonces must derive the fixture seed");
+    let env = court_envelope();
+    let e = decode_court_envelope(&env).expect("decode court envelope");
+    assert!(e.tapes.len() >= n, "fixture must have at least {n} tapes");
+
+    // Fold the chain head over the prefix (the value both players co-sign).
+    let mut head = court_chain_genesis(seed);
+    for (i, tape) in e.tapes[..n].iter().enumerate() {
+        head = court_chain_step(&head, i as u32, tape);
+    }
+    let head_k = head;
+    let sig_a = sign_recoverable(key_a, &head_k);
+    let sig_b = sign_recoverable(key_b, &head_k);
+    let evidence_body = build_forfeit_evidence_shape2(&e.tapes[..n], &head_k, &sig_a, &sig_b);
+
+    // team-of-turn = idx % 2; stalled = that team's player, claimant = the other.
+    let stalled_idx = n as u32;
+    let claimant_id = if (stalled_idx % 2) == 0 { p1 } else { p0 };
+
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let witness_lock = forfeit_witness(&n0, &n1, &evidence_body);
+    ForfeitSetup {
+        args,
+        witness_lock,
+        head_k,
+        stalled_idx,
+        claimant_id,
+        committed_head: [0u8; 32],
+        has_commit: 0,
+    }
+}
+
+/// Canonical valid shape-2 forfeit-claim setup: the first 5 tapes of the fixture
+/// (match still in progress), mutually signed by both player keys.
+fn forfeit_claim_setup() -> ForfeitSetup {
+    let (k0, k1) = signing_keys();
+    let setup = forfeit_claim_setup_keys(5, &k0, &k1);
+    // Sanity: the 5-tape prefix is mid-match (no winner yet) — a finished match
+    // settles via the court path, not forfeit.
+    let (n0, n1) = nonces();
+    let seed = derive_seed(&n0, &n1);
+    let env = court_envelope();
+    let e = decode_court_envelope(&env).expect("decode court envelope");
+    let mut w = create_world(seed, 1280, 720);
+    for tape in &e.tapes[..5] {
+        for input in decode_tape(tape) {
+            step_world(&mut w, &input);
+        }
+    }
+    assert!(w.winner.is_none(), "5-tape prefix must be mid-match");
+    setup
+}
+
+/// Assemble + verify a Path-3 (forfeit-claim) spend. Deploys the escrow binary,
+/// builds the escrow script from `setup.args`, creates the POT input with the
+/// given absolute-block `since`, and ONE output = the pending-forfeit cell whose
+/// lock is the pinned forfeit-lock and whose args are the expected 316-byte blob
+/// (layout B), capacity POT. `output_code_hash_override` swaps the output lock's
+/// code_hash (to prove the forfeit-pin rejection).
+fn run_forfeit_claim(
+    setup: &ForfeitSetup,
+    since: u64,
+    output_code_hash_override: Option<[u8; 32]>,
+) -> Result<u64, ckb_testtool::ckb_error::Error> {
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(ESCROW_BIN)
+        .expect("escrow-lock binary missing — build it for riscv64imac-unknown-none-elf first")
+        .into();
+    let escrow_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&escrow_out, Bytes::from(setup.args.clone()))
+        .expect("build escrow lock");
+
+    // The escrow-lock's OWN identity, exactly as the contract reads via load_script().
+    let escrow_code_hash: [u8; 32] = lock.code_hash().as_slice().try_into().unwrap();
+    let escrow_hash_type: u8 = lock.hash_type().into();
+
+    // forfeit_deadline = claim_since + reveal_window (reveal_window pinned in args).
+    let forfeit_deadline = since + REVEAL_WINDOW;
+
+    // Build the expected 316-byte pending-forfeit args blob (layout B).
+    let mut blob = Vec::with_capacity(316);
+    blob.extend_from_slice(&escrow_code_hash); // [0..32]    escrow code_hash (PIN)
+    blob.push(escrow_hash_type); // [32]       escrow hash_type
+    blob.extend_from_slice(&setup.args); // [33..219]  escrow args VERBATIM (186)
+    blob.extend_from_slice(&setup.claimant_id); // [219..239] claimant_id (20)
+    blob.extend_from_slice(&setup.stalled_idx.to_le_bytes()); // [239..243] stalled_idx (4 LE)
+    blob.extend_from_slice(&setup.head_k); // [243..275] head_k (32)
+    blob.extend_from_slice(&setup.committed_head); // [275..307] committed_head (32)
+    blob.push(setup.has_commit); // [307]      has_commit (1)
+    blob.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [308..316] deadline (8 LE)
+    assert_eq!(blob.len(), 316, "pending-forfeit args must be 316 bytes");
+
+    // The pending-forfeit output lock: pinned forfeit-lock identity + expected blob.
+    let (forfeit_code_hash, _) = forfeit_lock_identity();
+    let out_code_hash = output_code_hash_override.unwrap_or(forfeit_code_hash);
+    let forfeit_lock = Script::new_builder()
+        .code_hash(out_code_hash.pack())
+        .hash_type(ScriptHashType::Data1)
+        .args(Bytes::from(blob).pack())
+        .build();
+
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+    // Absolute-block-number since: top byte 0, value = block height.
+    let since_packed: Uint64 = since.pack();
+    let input = CellInput::new_builder()
+        .since(since_packed)
+        .previous_output(input_cell)
+        .build();
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(setup.witness_lock.clone())).pack())
+        .build();
+
+    let tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack())
+        .output(
+            CellOutput::new_builder()
+                .capacity(POT)
+                .lock(forfeit_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack());
+    let tx = ctx.complete_tx(tb.build());
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
+}
+
+#[test]
+fn accepts_forfeit_claim_shape2() {
+    let setup = forfeit_claim_setup();
+    let r = run_forfeit_claim(&setup, 500, None);
+    assert!(
+        r.is_ok(),
+        "valid shape-2 forfeit-claim must unlock, got {:?}",
+        r.err()
+    );
+    if let Ok(cycles) = r {
+        eprintln!("forfeit-claim shape2 cycles: {cycles}");
+    }
+}
+
+#[test]
+fn rejects_forfeit_forged_prefix() {
+    let mut setup = forfeit_claim_setup();
+    // Flip one byte of the first prefix tape so the replay head != posted head_k.
+    // evidence_body starts at witness offset 65 (tag‖nonce0‖nonce1); within it,
+    // turn_count(2) + first tape_len(2) → first tape byte at 65 + 4.
+    setup.witness_lock[65 + 4] ^= 0x01;
+    let r = run_forfeit_claim(&setup, 500, None);
+    assert!(
+        r.is_err(),
+        "a forged prefix tape must reject (replay head != posted head_k, E_FORFEIT_PREFIX)"
+    );
+}
+
+#[test]
+fn rejects_forfeit_bad_mutual_sig() {
+    let (k0, _k1) = signing_keys();
+    // Both sigs from k0 → they recover to {p0, p0}, which does not cover {p0, p1}.
+    let setup = forfeit_claim_setup_keys(5, &k0, &k0);
+    let r = run_forfeit_claim(&setup, 500, None);
+    assert!(
+        r.is_err(),
+        "mutual sigs not covering {{p0,p1}} must reject (E_FORFEIT_MUTUAL)"
+    );
+}
+
+#[test]
+fn rejects_forfeit_match_already_over() {
+    let (k0, k1) = signing_keys();
+    // Use the FULL 23-tape fixture as the prefix → the replay sets a winner, so
+    // the match is over and must settle via the court path, not forfeit.
+    let setup = forfeit_claim_setup_keys(23, &k0, &k1);
+    let r = run_forfeit_claim(&setup, 500, None);
+    assert!(
+        r.is_err(),
+        "a prefix that already finished the match must reject (E_FORFEIT_MATCH_OVER)"
+    );
+    // A rejected script exposes no cycle count via verify_tx; the rejection lands
+    // only AFTER the full 23-tape replay (check 5 follows the check-4 replay).
+    match r {
+        Ok(cycles) => eprintln!("forfeit match-over cycles: {cycles}"),
+        Err(e) => eprintln!("forfeit match-over rejected after full replay: {e}"),
+    }
+}
+
+#[test]
+fn rejects_forfeit_output_wrong_lock() {
+    let setup = forfeit_claim_setup();
+    // Pending-forfeit output under an attacker code_hash (not the pinned forfeit-lock).
+    let r = run_forfeit_claim(&setup, 500, Some([0xFFu8; 32]));
+    assert!(
+        r.is_err(),
+        "pending-forfeit output under an attacker lock must reject (E_FORFEIT_OUTPUT)"
+    );
 }
 
 // RESIDUAL — final-move equivocation (see ESCROW.md §8 / design spec §6). The
