@@ -157,6 +157,87 @@ pub fn decode_court_envelope(bytes: &[u8]) -> Option<CourtEnvelope<'_>> {
     Some(CourtEnvelope { tapes, sig0, sig1 })
 }
 
+/// Decoded FORFEIT-CLAIM evidence (the witness body after the tag byte).
+pub struct ForfeitEvidence<'a> {
+    pub prefix_tapes: Vec<&'a [u8]>,
+    pub head_k: &'a [u8; 32],
+    pub sig_a: &'a [u8; 65],
+    pub sig_b: &'a [u8; 65],
+    pub shape: u8, // 1 = committed-withheld, 2 = never-committed
+    pub committed_head: Option<&'a [u8; 32]>,
+    pub commit_sig: Option<&'a [u8; 65]>,
+}
+
+/// Decode FORFEIT-CLAIM evidence. `None` on any malformed input or trailing bytes.
+pub fn decode_forfeit_evidence(bytes: &[u8]) -> Option<ForfeitEvidence<'_>> {
+    if bytes.len() < 2 {
+        return None;
+    }
+    let turn_count = u16::from_le_bytes([bytes[0], bytes[1]]) as usize;
+    let mut offset = 2usize;
+    let mut prefix_tapes = Vec::with_capacity(turn_count);
+    for _ in 0..turn_count {
+        let len_end = offset.checked_add(2)?;
+        if len_end > bytes.len() {
+            return None;
+        }
+        let tape_len = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]) as usize;
+        offset = len_end;
+        let tape_end = offset.checked_add(tape_len)?;
+        if tape_end > bytes.len() {
+            return None;
+        }
+        prefix_tapes.push(&bytes[offset..tape_end]);
+        offset = tape_end;
+    }
+    let hk_end = offset.checked_add(32)?;
+    if hk_end > bytes.len() {
+        return None;
+    }
+    let head_k: &[u8; 32] = bytes[offset..hk_end].try_into().ok()?;
+    offset = hk_end;
+    let sa_end = offset.checked_add(65)?;
+    if sa_end > bytes.len() {
+        return None;
+    }
+    let sig_a: &[u8; 65] = bytes[offset..sa_end].try_into().ok()?;
+    offset = sa_end;
+    let sb_end = offset.checked_add(65)?;
+    if sb_end > bytes.len() {
+        return None;
+    }
+    let sig_b: &[u8; 65] = bytes[offset..sb_end].try_into().ok()?;
+    offset = sb_end;
+    if offset >= bytes.len() {
+        return None;
+    }
+    let shape = bytes[offset];
+    offset += 1;
+    let (committed_head, commit_sig) = match shape {
+        2 => (None, None),
+        1 => {
+            let ch_end = offset.checked_add(32)?;
+            if ch_end > bytes.len() {
+                return None;
+            }
+            let ch: &[u8; 32] = bytes[offset..ch_end].try_into().ok()?;
+            offset = ch_end;
+            let cs_end = offset.checked_add(65)?;
+            if cs_end > bytes.len() {
+                return None;
+            }
+            let cs: &[u8; 65] = bytes[offset..cs_end].try_into().ok()?;
+            offset = cs_end;
+            (Some(ch), Some(cs))
+        }
+        _ => return None, // unknown shape
+    };
+    if offset != bytes.len() {
+        return None; // strict length
+    }
+    Some(ForfeitEvidence { prefix_tapes, head_k, sig_a, sig_b, shape, committed_head, commit_sig })
+}
+
 /// A single signed game turn extracted from the attested envelope.
 ///
 /// Borrows directly from the envelope byte slice — zero copy.
@@ -286,5 +367,55 @@ mod court_chain_tests {
         assert!(verify_reveal(&prior, 0, &[1, 2, 3], &head));
         assert!(!verify_reveal(&prior, 0, &[1, 2, 4], &head)); // tape changed
         assert!(!verify_reveal(&prior, 1, &[1, 2, 3], &head)); // idx changed
+    }
+
+    #[test]
+    fn forfeit_evidence_round_trips_both_shapes() {
+        // shape 2 (never-committed): 2 prefix tapes + headK + 2 sigs + shape(2)
+        let t0: &[u8] = &[0xaa, 0xbb];
+        let t1: &[u8] = &[0xcc];
+        let hk = [7u8; 32];
+        let sa = [1u8; 65];
+        let sb = [2u8; 65];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        for t in [t0, t1] {
+            bytes.extend_from_slice(&(t.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(t);
+        }
+        bytes.extend_from_slice(&hk);
+        bytes.extend_from_slice(&sa);
+        bytes.extend_from_slice(&sb);
+        bytes.push(2u8);
+        let e = decode_forfeit_evidence(&bytes).expect("shape2 decode");
+        assert_eq!(e.prefix_tapes, vec![t0, t1]);
+        assert_eq!(e.head_k, &hk);
+        assert_eq!(e.shape, 2);
+        assert!(e.committed_head.is_none());
+
+        // shape 1 (committed-withheld): append committed_head + commit_sig
+        let ch = [9u8; 32];
+        let cs = [3u8; 65];
+        bytes.pop(); // remove shape(2)
+        bytes.push(1u8);
+        bytes.extend_from_slice(&ch);
+        bytes.extend_from_slice(&cs);
+        let e1 = decode_forfeit_evidence(&bytes).expect("shape1 decode");
+        assert_eq!(e1.shape, 1);
+        assert_eq!(e1.committed_head, Some(&ch));
+        assert_eq!(e1.commit_sig, Some(&cs));
+
+        // strict length: trailing byte rejected
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(decode_forfeit_evidence(&extra).is_none());
+        // unknown shape rejected
+        let mut badshape = Vec::new();
+        badshape.extend_from_slice(&0u16.to_le_bytes());
+        badshape.extend_from_slice(&hk);
+        badshape.extend_from_slice(&sa);
+        badshape.extend_from_slice(&sb);
+        badshape.push(3u8);
+        assert!(decode_forfeit_evidence(&badshape).is_none());
     }
 }
