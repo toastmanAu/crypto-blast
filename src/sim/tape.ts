@@ -5,7 +5,8 @@
  * the Teeworlds-on-CKB model. Inputs are tiny (a handful of booleans per tick),
  * so a whole turn-based match is a few KB at most.
  */
-import { WorldState, TickInput, createWorld, stepWorld, hashWorld } from './World';
+import { WorldState, TickInput, createWorld, stepWorld, commitWorld } from './World';
+import { fromHex } from './serialize';
 
 export interface GameTape {
   seed: number;
@@ -30,9 +31,21 @@ export function replay(tape: GameTape): WorldState {
 }
 
 /**
- * Verify a claimed final-state fingerprint against an independent replay.
+ * Verify a claimed 32-byte commitment (0x-hex) against an independent replay.
  * This is exactly what an on-chain verifier does: trust nothing, re-execute.
+ * Malformed claims are rejected (false), never thrown, since the claim is
+ * untrusted input. The compare is constant-time to avoid timing leaks.
  */
-export function verifyTape(tape: GameTape, claimedHash: number): boolean {
-  return hashWorld(replay(tape)) === claimedHash;
+export function verifyTape(tape: GameTape, claimedHex: string): boolean {
+  let want: Uint8Array;
+  try {
+    want = fromHex(claimedHex);
+  } catch {
+    return false;
+  }
+  const got = commitWorld(replay(tape));
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got[i] ^ want[i];
+  return diff === 0;
 }

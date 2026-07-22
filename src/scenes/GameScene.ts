@@ -4,9 +4,10 @@ import { TerrainRenderer } from '../render/TerrainRenderer';
 import { FIXED_DT, FIXED_HZ, MAX_STEPS_PER_FRAME, drainAccumulator, lerp } from '../core/time';
 import {
   WorldState, TickInput, SimEvent, APE_WIDTH, APE_HEIGHT, APE_MAX_HEALTH,
-  createWorld, stepWorld, muzzle, hashWorld,
+  createWorld, stepWorld, muzzle, commitWorld,
 } from '../sim/World';
 import { GameTape, createTape, recordTick } from '../sim/tape';
+import { toHex } from '../sim/serialize';
 import { aimAngle } from '../core/aim';
 import { isSolid, columnSurface } from '../physics/DestructibleTerrain';
 import { nextRandom } from '../core/rng';
@@ -268,13 +269,13 @@ export class GameScene extends Phaser.Scene {
 
   /** Download the recorded tape and show the exact command to verify it. */
   private exportTape(): void {
-    const hash = (hashWorld(this.world) >>> 0).toString(16).padStart(8, '0');
+    const commitment = toHex(commitWorld(this.world));
     const name = `crypto-blast-seed${this.tape.seed}-tick${this.world.tick}.json`;
     downloadJson(name, this.tape);
 
     const toast = this.add.text(
       20, GAME_HEIGHT - 70,
-      `Saved ${name}  (${this.tape.inputs.length} ticks)\nverify:  npm run replay -- ${name} --expect 0x${hash}`,
+      `Saved ${name}  (${this.tape.inputs.length} ticks)\nverify:  npm run replay -- ${name} --expect ${commitment}`,
       { color: '#9effa0', fontSize: '13px', backgroundColor: '#00000088', padding: { x: 6, y: 4 } },
     );
     this.tweens.add({ targets: toast, alpha: 0, delay: 4000, duration: 1000, onComplete: () => toast.destroy() });

@@ -51,7 +51,7 @@ Crypto Blast is designed for trustless, verifiable matches — the kind of compe
 
 1. **A match is just `{ seed, inputs[] }`** (a *tape*). `stepWorld(world, input)` is a pure function of `(WorldState, TickInput)` — it never reads wall-clock time, `Math.random`, or any Phaser object. Randomness comes from a **serializable RNG cursor** (`src/core/rng.ts`); time advances in fixed 50 Hz ticks (`FIXED_DT`), with the renderer interpolating between ticks. Everything that affects the outcome — including weapon selection and per-team ammo — flows through `TickInput` and lives in `WorldState`.
 
-2. **One hash fingerprints the whole match.** `hashWorld()` (`src/sim/World.ts`) FNV-folds the entire `WorldState` plus the terrain mask into a single 32-bit value. Replay the tape from its seed and you get a bit-identical world and the same hash.
+2. **One 32-byte commitment fingerprints the whole match.** `commitWorld()` (`src/sim/World.ts`) takes a canonical, float-safe serialization of the entire `WorldState` plus the terrain mask (`src/sim/serialize.ts`) and runs **blake2b-256** over it. The digest uses CKB's `ckb-default-hash` personalization, so it is **byte-identical to the chain's native `ckbhash`** — an on-chain CKB-VM verifier reproduces the exact commitment with the chain's own primitive. Replay the tape from its seed and you get a bit-identical world and the same 32-byte commitment.
 
 3. **Verification is re-execution — trust nothing.** `verifyTape(tape, claimedHash)` (`src/sim/tape.ts`) reconstructs the match from the seed + inputs and checks the recomputed hash against the claim. This is exactly what an on-chain verifier does.
 
@@ -64,7 +64,7 @@ In-game, press **T** to download the tape and print the exact command. Then:
 npm run replay -- match.json
 
 # Verify a tape against a claimed hash (exit 0 = VERIFIED, 1 = MISMATCH)
-npm run replay -- match.json --expect 0x1a2b3c4d
+npm run replay -- match.json --expect 0x8dd41dc65a2da6d35ebd9fe49d1a3a1b77f135a64013aa479295a577dee7ed76
 
 # Or run the built-in scripted demo match
 npm run replay -- --demo
@@ -74,9 +74,12 @@ npm run replay -- --demo
 
 ### On-chain status — honest version
 
-The **off-chain verifier works today** and runs in CI as part of the test suite (`tests/replay.test.ts` re-executes tapes and asserts hash self-consistency). A true **on-chain** (CKB-VM / RISC-V) verifier is a **planned stretch goal, not yet implemented**, because of one concrete blocker:
+The **off-chain verifier works today** and runs in CI as part of the test suite (`tests/replay.test.ts` re-executes tapes and asserts commitment self-consistency; `tests/commit.test.ts` freezes golden-vector commitments and checks parity against an independent `ckbhash`). Two properties make the model on-chain-ready:
 
-> `Math.cos` / `Math.sin` (used for launch angles) are **not bit-identical across engines**. The hash is therefore canonical only within V8 — perfect for the JS/CLI off-chain half, but a CKB-VM replay-verifier would need **fixed-point or softfloat trig** to reproduce the exact same hash on-chain.
+- **The commitment is CKB-native.** It's blake2b-256 with CKB's `ckb-default-hash` personalization, so a CKB-VM verifier computes the identical 32-byte digest via the native `ckb_blake2b` — no hash to port into RISC-V.
+- **The simulation is cross-engine deterministic.** The sim path uses only operations ECMAScript requires to be correctly-rounded (`+ - * /`, `Math.sqrt`) plus integer/exact ops. The one prior gap — `Math.cos` / `Math.sin` for launch angles, which are *implementation-approximated* and differ across engines — is gone: `src/core/trig.ts` provides `dsin`/`dcos` built from deterministic ops only (range-reduced Taylor polynomial), verified to stay correct even with `Math.sin`/`Math.cos` sabotaged (`tests/trig.test.ts`). The commitment is therefore identical on any conformant engine, not just V8.
+
+What remains for true **on-chain** verification is the **CKB-VM / RISC-V verifier program itself** (a planned stretch goal) — porting the sim's `stepWorld` + `serializeWorld` + `commitWorld` into an on-chain script. The hard determinism prerequisites are now met.
 
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
@@ -90,7 +93,7 @@ src/
   physics/     ProjectilePhysics.ts, DestructibleTerrain.ts
   terrain/     TerrainGenerator.ts (seeded terrain mask)
   weapons/     weaponData.ts (WEAPON_ORDER + WeaponDef arsenal)
-  sim/         World.ts (WorldState + stepWorld + hashWorld), tape.ts, demoMatch.ts
+  sim/         World.ts (WorldState + stepWorld + commitWorld), serialize.ts (canonical bytes + blake2b-256), tape.ts, demoMatch.ts
   render/      TerrainRenderer.ts, WeaponWheel.ts   (Phaser; read sim, never mutate it)
   scenes/      BootScene.ts, GameScene.ts (thin driver: sample input → step → interpolate → draw)
 scripts/       replay.ts (headless verify CLI)
@@ -102,7 +105,7 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 
 - The sim reads *only* `WorldState`; render code reads sim state but **never mutates it**.
 - No `Date.now`, no `Math.random`, no Phaser inside `src/sim` / `src/physics` / `src/core`.
-- Anything that changes the outcome is part of `TickInput` + `WorldState` and is mixed into `hashWorld`.
+- Anything that changes the outcome is part of `TickInput` + `WorldState` and is serialized into the commitment (`serializeWorld` → `commitWorld`).
 - `WEAPON_ORDER` is **append-only** — a weapon's index is encoded in tapes, so reordering it would invalidate past matches (guarded by a test).
 
 ---
@@ -115,7 +118,8 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 - **Render/art wave** — sprites, ape walk/jump/hurt/victory animations, tiled terrain, effects (muzzle flash, smoke, splash, explosion), crystal decor. ✅
 - **P3** — data-driven arsenal + radial weapon wheel + per-team ammo, threaded through the deterministic pipeline. ✅
 - **P4** — special munition behaviours (cluster shrapnel, seed sub-bombs, proximity mines, gas DoT cloud, Bridge teleport). ⏳
-- **On-chain (stretch)** — fixed-point / softfloat trig → CKB-VM replay-verification of match tapes. ⏳
+- **Commitment hardening** — 32-byte blake2b-256 commitment (`commitWorld`, CKB-native `ckbhash`) over a canonical float-safe serialization; deterministic `dsin`/`dcos` so the commitment is cross-engine canonical. ✅
+- **On-chain (stretch)** — port `stepWorld` + `serializeWorld` + `commitWorld` into a CKB-VM replay-verifier script. ⏳
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 

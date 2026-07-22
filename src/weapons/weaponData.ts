@@ -44,7 +44,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
   },
 };
 
-// Append-only forever: the index is encoded in tapes + hashWorld. Never reorder/remove.
+// Append-only forever: the index is encoded in tapes + the commitment. Never reorder/remove.
 export const WEAPON_ORDER: readonly string[] = [
   'moonShot', 'gasGrenade', 'airdropCluster', 'watermelonBomb', 'llamaBomb', 'bridge',
 ];

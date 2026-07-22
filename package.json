@@ -11,6 +11,7 @@
     "replay": "vite-node scripts/replay.ts"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "phaser": "^3.80.1"
   },
   "devDependencies": {
