@@ -83,6 +83,12 @@ pub fn court_chain_step(prev: &[u8; 32], turn_index: u32, tape_bytes: &[u8]) -> 
     ckb_blake2b(&[prev.as_slice(), &turn_index.to_le_bytes(), tape_bytes])
 }
 
+/// True iff `court_chain_step(prior, turn_index, tape) == head` — the on-chain
+/// REVEAL check (the posted tape opens the committed head). No secp recovery here.
+pub fn verify_reveal(prior: &[u8; 32], turn_index: u32, tape: &[u8], head: &[u8; 32]) -> bool {
+    court_chain_step(prior, turn_index, tape) == *head
+}
+
 /// A decoded court envelope: the per-turn tape slices plus the two trailing
 /// final-head signatures (player0's, player1's). Borrows from `bytes`.
 pub struct CourtEnvelope<'a> {
@@ -271,5 +277,14 @@ mod court_chain_tests {
     fn court_envelope_rejects_truncation() {
         let bytes = encode_court_envelope(&[&[1u8, 2]], &[0u8; 65], &[0u8; 65]);
         assert!(decode_court_envelope(&bytes[..bytes.len() - 1]).is_none());
+    }
+
+    #[test]
+    fn verify_reveal_matches_chain_step() {
+        let prior = court_chain_genesis(1234);
+        let head = court_chain_step(&prior, 0, &[1, 2, 3]);
+        assert!(verify_reveal(&prior, 0, &[1, 2, 3], &head));
+        assert!(!verify_reveal(&prior, 0, &[1, 2, 4], &head)); // tape changed
+        assert!(!verify_reveal(&prior, 1, &[1, 2, 3], &head)); // idx changed
     }
 }
