@@ -184,6 +184,27 @@ and the builder requirements (separate fee input, canonical payout lock pin).
 - secp: bundled k256 (no dynamic-loading; no `secp256k1_data` dep cell required)
 - Testnet broadcast: manual Plan-B step (not yet performed)
 
+**Phase 4 — forfeit protocol (commit-reveal move binding).** Phase 4 adds a
+tag-3 FORFEIT-CLAIM path to the escrow-lock plus a separate `forfeit-lock` binary
+(ADVANCE + FORFEIT-FINALIZE) that closes the court path's final-move equivocation
+residual at play-time. See [`docs/FORFEIT.md`](FORFEIT.md) for the full protocol
+(the per-turn COMMIT/ACK/REVEAL exchange, both stall shapes, the 186-byte escrow +
+316-byte pending-forfeit args layouts, and the cross-cell pins).
+
+Measured cycle counts (ckb-testtool, as-built; all under the 200M ceiling):
+
+| Path | Cycles | Notes |
+|------|-------:|-------|
+| FORFEIT-CLAIM (escrow tag 3, shape 2, 5-tape prefix) | **71,818,991 (~71.8M)** | **replay-dominated like court** — scales with prefix length; a near-complete prefix approaches the court cost (the Phase-4B match-duration item) |
+| ADVANCE (forfeit-lock tag 1, shape 1) | **6,223,106 (~6.2M)** | one chain fold + one recovery |
+| ADVANCE (forfeit-lock tag 1, shape 2) | **6,225,445 (~6.2M)** | ditto |
+| FORFEIT-FINALIZE (forfeit-lock tag 2) | **52,545 (~52.5K)** | payout check only |
+
+The forfeit-lock does **no world replay** — it imports only `court_chain_step`, so
+ADVANCE/FINALIZE are cheap (a single chain fold + at most one secp recovery). The
+replay-heavy work stays in the escrow-lock's FORFEIT-CLAIM branch, which reuses the
+4A replay machinery and is therefore replay-dominated like court.
+
 ---
 
 ## 7. On-chain verification (lock script)
