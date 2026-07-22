@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests (vitest, 85 tests)
+      - name: Run tests (vitest, 98 tests)
         run: npm test
 
       - name: Build (tsc + vite bundle)
@@ -44,7 +44,7 @@ jobs:
         with:
           workspaces: verifier
 
-      - name: Host conformance tests (16 tests)
+      - name: Host tests (25 — 7 unit + 18 TS-conformance)
         working-directory: verifier
         run: cargo test
 
@@ -88,6 +88,6 @@ jobs:
         working-directory: verifier/contract
         run: cargo build --release --target riscv64imac-unknown-none-elf
 
-      - name: Run ckb-testtool acceptance tests (3 tests)
+      - name: Run ckb-testtool acceptance tests (29 — verify 3 + escrow 19 + forfeit 7)
         working-directory: verifier/contract
         run: cargo test
