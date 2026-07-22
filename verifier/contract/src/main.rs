@@ -160,7 +160,9 @@ mod contract {
 
         // commit = blake2b-256(ckb-default-hash) over the canonical bytes.
         let bytes: Vec<u8> = serialize_world(&world);
-        let mut hasher = Blake2bBuilder::new(32).personal(b"ckb-default-hash").build();
+        let mut hasher = Blake2bBuilder::new(32)
+            .personal(b"ckb-default-hash")
+            .build();
         hasher.update(&bytes);
         let mut out = [0u8; 32];
         hasher.finalize(&mut out);

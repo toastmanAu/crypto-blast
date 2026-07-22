@@ -70,6 +70,9 @@ pub use world::*;
 mod tape;
 pub use tape::*;
 
+mod attest;
+pub use attest::*;
+
 /// blake2b-256 with CKB's `ckb-default-hash` personalization — byte-identical
 /// to the chain's native ckbhash and to the TS `commitWorld` digest.
 ///

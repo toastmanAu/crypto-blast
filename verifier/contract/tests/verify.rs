@@ -21,11 +21,7 @@ const CONTRACT_BIN: &str = "target/riscv64imac-unknown-none-elf/release/verifier
 
 /// Build the tx and verify it. `Ok` ⇒ the lock accepted (tape unlocks the cell);
 /// `Err` ⇒ script verification failed (the lock rejected the unlock).
-fn run(
-    seed: i32,
-    commitment: &[u8],
-    tape: &[u8],
-) -> Result<u64, ckb_testtool::ckb_error::Error> {
+fn run(seed: i32, commitment: &[u8], tape: &[u8]) -> Result<u64, ckb_testtool::ckb_error::Error> {
     let mut ctx = Context::default();
     let bin: Bytes = std::fs::read(CONTRACT_BIN)
         .expect("contract binary missing — run `cargo build --release --target riscv64imac-unknown-none-elf` first")
@@ -93,8 +89,5 @@ fn rejects_forged_commitment() {
 fn rejects_wrong_seed() {
     let (_seed, c, tape) = demo();
     // Wrong seed ⇒ different terrain/spawns/wind ⇒ different commitment.
-    assert!(
-        run(9999, &c, &tape).is_err(),
-        "wrong seed must reject"
-    );
+    assert!(run(9999, &c, &tape).is_err(), "wrong seed must reject");
 }

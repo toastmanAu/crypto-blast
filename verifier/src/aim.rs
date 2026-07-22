@@ -44,12 +44,7 @@ pub fn aim_angle(aim: &AimState) -> f64 {
 /// dir: +1 raises elevation toward vertical, -1 lowers it toward the horizon.
 pub fn adjust_elevation(aim: &mut AimState, dir: f64, dt: f64) {
     aim.elevation += dir * ANGLE_SPEED * dt;
-    if aim.elevation > ELEVATION_MAX {
-        aim.elevation = ELEVATION_MAX;
-    }
-    if aim.elevation < ELEVATION_MIN {
-        aim.elevation = ELEVATION_MIN;
-    }
+    aim.elevation = aim.elevation.clamp(ELEVATION_MIN, ELEVATION_MAX);
 }
 
 /// Point the ape left (-1) or right (+1); elevation is preserved.
