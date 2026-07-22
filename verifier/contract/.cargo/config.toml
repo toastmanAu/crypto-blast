@@ -1,0 +1,17 @@
+# RISC-V-only build flags for the contract binary. Scoped to the target triple
+# (NOT a `[build] target = ...`) so a plain host `cargo test` still builds for
+# the host and runs the ckb-testtool integration tests in tests/verify.rs.
+#
+# `-C target-feature=-a` disables the RISC-V atomic (A) extension. CKB-VM's
+# script VM enables only IMC|B|MOP (even under ckb2023 / VM2 — NO ISA_A), so any
+# AMO/LR/SC instruction traps with InvalidInstruction. The `imac` target
+# otherwise lets LLVM emit them — notably from the `bytes` crate's Arc-style
+# refcounts that molecule/ckb-types pull in. With the A extension off, LLVM
+# lowers those atomics to `__atomic_*` libcalls, which ckb-std's default
+# `dummy-atomic` feature resolves with single-hart software stubs.
+# `-a` turns the atomic extension off; `+forced-atomics` then makes LLVM lower
+# every atomic to a `__atomic_*` libcall (instead of failing instruction
+# selection on the `bytes` crate's 64-bit atomicrmw — "Cannot select
+# AtomicLoadAdd"). ckb-std's `dummy-atomic` feature supplies those libcalls.
+[target.riscv64imac-unknown-none-elf]
+rustflags = ["-C", "target-feature=-a,+forced-atomics"]

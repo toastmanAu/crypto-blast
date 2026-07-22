@@ -1,0 +1,8 @@
+# The ckb-std 1.1 / ckb-testtool 1.1 dependency chain (ckb-gen-types 1.1.1,
+# ckb-hash 1.1.1, ...) declares rust-version 1.95, so this contract crate pins
+# the 1.95 toolchain. The verifier lib core it consumes is deterministic integer
+# / libm float math, so the replay stays byte-identical regardless of compiler
+# version (the accepts_valid_tape test self-gates against the TS golden).
+[toolchain]
+channel = "1.95"
+targets = ["riscv64imac-unknown-none-elf"]

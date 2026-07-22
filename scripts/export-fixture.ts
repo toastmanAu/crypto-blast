@@ -1,6 +1,6 @@
 // Dumps the canonical bytes + golden commitment of a fixed world, so the Rust
 // kernel can be cross-checked against the exact TS output. Run via vite-node.
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { createWorld, commitWorld } from '../src/sim/World';
 import { serializeWorld, toHex } from '../src/sim/serialize';
 import { nextRandom } from '../src/core/rng';
@@ -62,3 +62,34 @@ function dumpTape(name: string, seed: number, inputs: ReturnType<typeof demoInpu
 dumpTape('demo', 1234, demoInputs());
 dumpTape('turnloop', 1234, turnLoopInputs());
 dumpTape('selectfire', 7, selectThenFireInputs());
+
+import { tapeToBytes } from '../src/sim/tapeBinary';
+for (const name of ['demo', 'turnloop', 'selectfire']) {
+  const t = JSON.parse(readFileSync(`verifier/tests/tape-${name}.json`, 'utf8'));
+  writeFileSync(`verifier/tests/tape-${name}.bin`, Buffer.from(tapeToBytes(t.inputs)));
+  console.log(`exported tape-${name}.bin (${t.inputs.length} ticks)`);
+}
+
+// Midflight tape: stop recording while the projectile is still airborne,
+// byte-proving the shot-present serialize branch.
+{
+  const all = selectThenFireInputs();
+  const fireIdx = all.findIndex((i) => i.fireReleased);
+  const cut = all.slice(0, fireIdx + 10); // a few ticks into flight
+  const t = createTape(7, 1280, 720);
+  for (const inp of cut) recordTick(t, inp);
+  const w = replay(t);
+  if (!w.shot) throw new Error('midflight tape expected shot!=null — adjust the cut');
+  writeFileSync('verifier/tests/tape-midflight.bin', Buffer.from(tapeToBytes(t.inputs)));
+  writeFileSync('verifier/tests/tape-midflight.hash', toHex(commitWorld(w)));
+  console.log(`exported tape-midflight (${t.inputs.length} ticks, shot present at cut=${fireIdx + 10})`);
+}
+
+// Winner fixture: a world serialized with winner set, covering the winner!=null branch.
+{
+  const w = createWorld(1234, 1280, 720);
+  w.winner = 0;
+  writeFileSync('verifier/tests/fixture-winner.bin', Buffer.from(serializeWorld(w)));
+  writeFileSync('verifier/tests/fixture-winner.hash', toHex(commitWorld(w)));
+  console.log('exported fixture-winner');
+}

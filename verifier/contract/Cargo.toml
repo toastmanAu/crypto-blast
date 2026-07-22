@@ -1,0 +1,42 @@
+[package]
+name = "verifier-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# The on-chain verifier LOCK SCRIPT. Built for `riscv64imac-unknown-none-elf`
+# (the CKB-VM target) as a `no_std` / `no_main` contract; the `src/main.rs` body
+# is gated behind `cfg(target_arch = "riscv64")` so the SAME crate also compiles
+# trivially for the host (an empty `main`) — that lets the ckb-testtool
+# integration tests in `tests/verify.rs` run under a normal host `cargo test`
+# while the contract binary itself is produced with
+# `--target riscv64imac-unknown-none-elf --release`.
+
+[[bin]]
+name = "verifier-lock"
+path = "src/main.rs"
+
+# Contract-only deps: pulled in for the riscv64 build, never needed by the host
+# test harness. ckb-std supplies the syscall ABI + entry/panic glue; verifier is
+# the no_std sim core; blake2b-ref is the no_std ckb-default-hash; the linked-list
+# allocator backs a single-hart global heap (CKB-VM has no atomics — a spin-lock
+# allocator traps; see verifier/bench/src/replay.rs for the proven approach).
+[target.'cfg(target_arch = "riscv64")'.dependencies]
+ckb-std = "1.1"
+blake2b-ref = { version = "0.3", default-features = false }
+verifier = { path = "..", default-features = false }
+linked_list_allocator = "0.10"
+
+# Host-only test harness: spins up CKB-VM in-process and asserts accept/reject.
+[dev-dependencies]
+ckb-testtool = "1.1"
+hex = "0.4"
+
+[profile.release]
+# Matches verifier/bench so the proven, byte-identical replay path is preserved.
+# NB: LTO is OFF — with `-C target-feature=-a` (see .cargo/config.toml) LTO
+# prevents LLVM from lowering the `bytes` crate's atomicrmw to `__atomic_*`
+# libcalls ("Cannot select AtomicLoadAdd"), so it is left disabled here.
+panic = "abort"
+opt-level = 3
+codegen-units = 1

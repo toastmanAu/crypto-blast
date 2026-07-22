@@ -1,6 +1,7 @@
 use blake2b_ref::Blake2bBuilder;
 use std::fs;
 use verifier::ckbhash;
+use verifier::decode_tape;
 use verifier::generate_terrain_mask;
 use verifier::next_random;
 use verifier::quantize;
@@ -230,4 +231,34 @@ fn create_world_serializes_to_ts_fixture() {
         "create_world serialization diverges from TS"
     );
     assert_eq!(format!("0x{}", hex(&ckbhash(&bytes))), want_hash.trim());
+}
+
+#[test]
+fn binary_tape_decodes_and_replays_to_ts_commitment() {
+    for (name, seed) in [("demo", 1234), ("turnloop", 1234), ("selectfire", 7)] {
+        let bytes = std::fs::read(format!("tests/tape-{name}.bin")).unwrap();
+        let want = std::fs::read_to_string(format!("tests/tape-{name}.hash")).unwrap();
+        let mut w = create_world(seed, 1280, 720);
+        for input in decode_tape(&bytes) { step_world(&mut w, &input); }
+        let got = format!("0x{}", hex(&ckbhash(&serialize_world(&w))));
+        assert_eq!(got, want.trim(), "binary tape {name} commitment diverges");
+    }
+}
+
+#[test]
+fn midflight_tape_byte_proves_shot_present_branch() {
+    let bytes = std::fs::read("tests/tape-midflight.bin").unwrap();
+    let want = std::fs::read_to_string("tests/tape-midflight.hash").unwrap();
+    let mut w = create_world(7, 1280, 720);
+    for input in decode_tape(&bytes) { step_world(&mut w, &input); }
+    assert!(w.shot.is_some(), "midflight world should have shot present");
+    assert_eq!(format!("0x{}", hex(&ckbhash(&serialize_world(&w)))), want.trim());
+}
+
+#[test]
+fn winner_set_serializes_byte_identical_to_ts() {
+    let want_bytes = std::fs::read("tests/fixture-winner.bin").unwrap();
+    let mut w = create_world(1234, 1280, 720);
+    w.winner = Some(0);
+    assert_eq!(serialize_world(&w), want_bytes, "winner!=null serialize diverges from TS");
 }
