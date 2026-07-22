@@ -59,6 +59,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ckb-std's build.rs uses cc-rs, which probes for a bare-metal RISC-V C
+      # compiler (riscv64-unknown-elf-gcc) even though the contract is pure Rust.
+      # The GitHub runner doesn't ship one, so install the newlib toolchain.
+      - name: Install riscv64 bare-metal GCC (for ckb-std build.rs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-unknown-elf
+
       # verifier/contract/rust-toolchain.toml pins channel = "1.95" with
       # targets = ["riscv64imac-unknown-none-elf"].  Install that exact toolchain
       # and target here so the cache key is stable and cargo picks it up.
