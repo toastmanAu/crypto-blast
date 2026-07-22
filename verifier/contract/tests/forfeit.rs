@@ -16,6 +16,7 @@ use ckb_testtool::{
     },
     context::Context,
 };
+use k256::ecdsa::SigningKey;
 
 const FORFEIT_BIN: &str = "target/riscv64imac-unknown-none-elf/release/forfeit-lock";
 const POT: u64 = 100_000;
@@ -52,6 +53,30 @@ fn player_ids() -> ([u8; 20], [u8; 20]) {
     let p0 = hex::decode(lines.next().unwrap().trim()).unwrap();
     let p1 = hex::decode(lines.next().unwrap().trim()).unwrap();
     (p0.try_into().unwrap(), p1.try_into().unwrap())
+}
+
+/// The two fixture player secp keys: scalars 1 and 2 (priv byte31 = 1 / 2) —
+/// the same keys that produced `fixture-attested-lockhashes.txt`, so their
+/// blake160 ids are exactly `player_ids()` (k0 → player0, k1 → player1).
+fn signing_keys() -> (SigningKey, SigningKey) {
+    let mut k0 = [0u8; 32];
+    k0[31] = 1;
+    let mut k1 = [0u8; 32];
+    k1[31] = 2;
+    (
+        SigningKey::from_slice(&k0).expect("player0 key"),
+        SigningKey::from_slice(&k1).expect("player1 key"),
+    )
+}
+
+/// Produce a `[v(1) ‖ r(32) ‖ s(32)]` recoverable signature over the 32-byte
+/// prehash — the layout the forfeit-lock recovers (recovery byte first, v∈{0,1}).
+fn sign_recoverable(key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
+    let (sig, recid) = key.sign_prehash_recoverable(msg).expect("sign");
+    let mut out = Vec::with_capacity(65);
+    out.push(recid.to_byte());
+    out.extend_from_slice(&sig.to_bytes());
+    out
 }
 
 /// Build a 186-byte escrow args whose `[0..33]` is the PINNED payout lock
@@ -156,6 +181,67 @@ fn run_finalize(
     ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
 }
 
+/// Assemble + verify an ADVANCE (tag=1) spend. Deploys the forfeit-lock binary,
+/// creates the POT pending-forfeit cell (lock = forfeit-lock with the 316-byte
+/// `args316`), builds the ADVANCE witness `tag=1(1) ‖ tape ‖ sig(trailing 65)`,
+/// and ONE output = the fresh escrow cell: the pinned escrow-lock identity
+/// (`escrow_lock_identity()`) with `args == escrow_args` (byte-exact), capacity
+/// POT. No `since` is needed for ADVANCE.
+fn run_advance(
+    args316: Vec<u8>,
+    escrow_args: &[u8],
+    tape: &[u8],
+    sig: &[u8],
+) -> Result<u64, ckb_testtool::ckb_error::Error> {
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(FORFEIT_BIN)
+        .expect("forfeit-lock binary missing — build it for riscv64imac-unknown-none-elf first")
+        .into();
+    let forfeit_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&forfeit_out, Bytes::from(args316))
+        .expect("build forfeit lock");
+
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_cell)
+        .build();
+
+    // ADVANCE witness: tag=1(1) ‖ tape ‖ sig_stalled(trailing 65).
+    let mut witness_lock = Vec::with_capacity(1 + tape.len() + sig.len());
+    witness_lock.push(1u8); // tag = 1 (advance)
+    witness_lock.extend_from_slice(tape);
+    witness_lock.extend_from_slice(sig);
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(witness_lock)).pack())
+        .build();
+
+    // Fresh escrow output: PINNED escrow-lock (code_hash + hash_type) with
+    // `args == escrow_args` (byte-exact), covering the pot.
+    let (escrow_code_hash, _) = escrow_lock_identity();
+    let escrow_out_lock = Script::new_builder()
+        .code_hash(escrow_code_hash.pack())
+        .hash_type(ScriptHashType::Data1)
+        .args(Bytes::from(escrow_args.to_vec()).pack())
+        .build();
+
+    let tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack())
+        .output(
+            CellOutput::new_builder()
+                .capacity(POT)
+                .lock(escrow_out_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack());
+    let tx = ctx.complete_tx(tb.build());
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
+}
+
 #[test]
 fn finalize_pays_claimant_after_deadline() {
     let (p0, p1) = player_ids();
@@ -184,4 +270,204 @@ fn finalize_pays_claimant_after_deadline() {
     if let Ok(cycles) = r {
         eprintln!("forfeit-finalize cycles: {cycles}");
     }
+}
+
+// ===========================================================================
+// ADVANCE (tag=1) — the stalled player plays the stalled move on-chain.
+//
+// Convention across these tests: stalled_idx = 5 → stalled_team = 5 % 2 = 1 →
+// player1 is the stalled player and player0 is the claimant. The stalled player
+// signs with k1; the chain folds are computed on the host with
+// `verifier::court_chain_step`.
+// ===========================================================================
+
+/// ADVANCE, shape 1 (committed-withheld): a commit was withheld, so the revealed
+/// tape must open the committed head. The stalled player (k1) reveals the exact
+/// committed tape → `h_next == committed_head` → accept, fresh escrow re-emitted.
+#[test]
+fn advance_voids_forfeit_shape1() {
+    let (p0, p1) = player_ids();
+    let (_k0, k1) = signing_keys();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0; // player0 is the claimant (player1 stalled)
+    let head_k = verifier::court_chain_genesis(1234);
+    let committed_tape = [9u8, 8, 7];
+    let committed_head = verifier::court_chain_step(&head_k, 5, &committed_tape);
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5, // stalled_idx
+        &head_k,
+        &committed_head,
+        1, // has_commit = 1 (committed-withheld)
+        forfeit_deadline,
+    );
+    // The stalled player (k1) reveals the committed tape: it opens committed_head.
+    let h_next = verifier::court_chain_step(&head_k, 5, &committed_tape);
+    assert_eq!(h_next, committed_head, "revealed tape must open the committed head");
+    let sig = sign_recoverable(&k1, &h_next);
+    let r = run_advance(args316, &escrow_args, &committed_tape, &sig);
+    assert!(
+        r.is_ok(),
+        "advance (shape 1) revealing the committed tape signed by the stalled player must unlock, got {:?}",
+        r.err()
+    );
+    if let Ok(cycles) = r {
+        eprintln!("forfeit-advance shape1 cycles: {cycles}");
+    }
+}
+
+/// ADVANCE, shape 2 (never-committed): no commit was withheld (`has_commit = 0`,
+/// `committed_head = zeros`), so the stalled player (k1) may play any fresh tape.
+#[test]
+fn advance_voids_forfeit_shape2() {
+    let (p0, p1) = player_ids();
+    let (_k0, k1) = signing_keys();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0;
+    let head_k = verifier::court_chain_genesis(1234);
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5,           // stalled_idx
+        &head_k,
+        &[0u8; 32],  // committed_head (zeros: never committed)
+        0,           // has_commit = 0 (never-committed)
+        forfeit_deadline,
+    );
+    // The stalled player (k1) plays a fresh tape.
+    let tape = [1u8, 2, 3];
+    let h_next = verifier::court_chain_step(&head_k, 5, &tape);
+    let sig = sign_recoverable(&k1, &h_next);
+    let r = run_advance(args316, &escrow_args, &tape, &sig);
+    assert!(
+        r.is_ok(),
+        "advance (shape 2) playing a fresh tape signed by the stalled player must unlock, got {:?}",
+        r.err()
+    );
+    if let Ok(cycles) = r {
+        eprintln!("forfeit-advance shape2 cycles: {cycles}");
+    }
+}
+
+/// REJECT (E_FF_ADVANCE_SIG): shape 2, but the CLAIMANT (k0) signs instead of the
+/// stalled player1. The signature recovers cleanly to player0's id, which is not
+/// the stalled player → the signer-attribution gate fires.
+#[test]
+fn rejects_advance_wrong_signer() {
+    let (p0, p1) = player_ids();
+    let (k0, _k1) = signing_keys();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0;
+    let head_k = verifier::court_chain_genesis(1234);
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5,           // stalled_idx
+        &head_k,
+        &[0u8; 32],  // committed_head
+        0,           // has_commit = 0 → head gate skipped, sig gate is the target
+        forfeit_deadline,
+    );
+    let tape = [1u8, 2, 3];
+    let h_next = verifier::court_chain_step(&head_k, 5, &tape);
+    // The CLAIMANT (k0 → player0) signs, not the stalled player1.
+    let sig = sign_recoverable(&k0, &h_next);
+    let r = run_advance(args316, &escrow_args, &tape, &sig);
+    assert!(
+        r.is_err(),
+        "advance signed by the claimant (not the stalled player) must reject (E_FF_ADVANCE_SIG)"
+    );
+}
+
+/// REJECT (E_FF_ADVANCE_HEAD): shape 1, but the stalled player reveals a
+/// DIFFERENT tape than the one committed, so `h_next != committed_head`. The
+/// committed-head equality gate fires BEFORE the (here valid) signature check.
+#[test]
+fn rejects_advance_head_mismatch_shape1() {
+    let (p0, p1) = player_ids();
+    let (_k0, k1) = signing_keys();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0;
+    let head_k = verifier::court_chain_genesis(1234);
+    let committed_tape = [9u8, 8, 7];
+    let committed_head = verifier::court_chain_step(&head_k, 5, &committed_tape);
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5, // stalled_idx
+        &head_k,
+        &committed_head,
+        1, // has_commit = 1 → head gate is the target
+        forfeit_deadline,
+    );
+    // Reveal a DIFFERENT tape; correctly signed by the stalled player over h_next,
+    // but h_next != committed_head.
+    let other_tape = [1u8, 2, 3];
+    let h_next = verifier::court_chain_step(&head_k, 5, &other_tape);
+    assert_ne!(h_next, committed_head, "other tape must not open the committed head");
+    let sig = sign_recoverable(&k1, &h_next);
+    let r = run_advance(args316, &escrow_args, &other_tape, &sig);
+    assert!(
+        r.is_err(),
+        "advance revealing a tape that doesn't open the committed head must reject (E_FF_ADVANCE_HEAD)"
+    );
+}
+
+/// REJECT (E_FF_BEFORE_DEADLINE): FINALIZE with an absolute-block `since` BELOW
+/// the forfeit deadline (999 < 1000). The output still pays the claimant in full,
+/// so the since/deadline gate is the one that fires.
+#[test]
+fn rejects_finalize_before_deadline() {
+    let (p0, p1) = player_ids();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0;
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5,           // stalled_idx
+        &[0u8; 32],  // head_k (unused by FINALIZE)
+        &[0u8; 32],  // committed_head
+        0,           // has_commit
+        forfeit_deadline,
+    );
+    // since (999) < deadline (1000); payout to the claimant is otherwise correct.
+    let r = run_finalize(args316, forfeit_deadline - 1, &[(claimant_id.to_vec(), POT)]);
+    assert!(
+        r.is_err(),
+        "finalize before the forfeit deadline must reject (E_FF_BEFORE_DEADLINE)"
+    );
+}
+
+/// REJECT (E_FF_PAYOUT): FINALIZE at/after the deadline, but the output pays the
+/// STALLED player (player1) instead of the claimant (player0). The since gate
+/// passes; the paid_to(claimant) gate finds nothing for the claimant → reject.
+#[test]
+fn rejects_finalize_payout_to_wrong_party() {
+    let (p0, p1) = player_ids();
+    let escrow_args = build_escrow_args(&p0, &p1);
+    let claimant_id = p0;
+    let forfeit_deadline = 1000u64;
+    let args316 = pending_forfeit_args(
+        &escrow_args,
+        &claimant_id,
+        5,           // stalled_idx
+        &[0u8; 32],  // head_k (unused by FINALIZE)
+        &[0u8; 32],  // committed_head
+        0,           // has_commit
+        forfeit_deadline,
+    );
+    // since >= deadline (opens finalize), but the full pot goes to the STALLED
+    // player (player1), not the claimant (player0).
+    let stalled_id = p1;
+    let r = run_finalize(args316, forfeit_deadline, &[(stalled_id.to_vec(), POT)]);
+    assert!(
+        r.is_err(),
+        "finalize paying the stalled player instead of the claimant must reject (E_FF_PAYOUT)"
+    );
 }
