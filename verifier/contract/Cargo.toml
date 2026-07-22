@@ -23,6 +23,15 @@ path = "src/main.rs"
 name = "escrow-lock"
 path = "src/escrow.rs"
 
+# The Phase-4B forfeit-lock (ADVANCE tag=1 + FORFEIT-FINALIZE tag=2). Resolves
+# the pending-forfeit cell created by the escrow-lock's tag-3 path: ADVANCE
+# re-emits a fresh escrow cell (the stalled player plays the stalled move);
+# FORFEIT-FINALIZE pays the full pot to the claimant after the reveal window.
+# Same no_std / no_main contract shape; imports only court_chain_step (no replay).
+[[bin]]
+name = "forfeit-lock"
+path = "src/forfeit.rs"
+
 # Contract-only deps: pulled in for the riscv64 build, never needed by the host
 # test harness. ckb-std supplies the syscall ABI + entry/panic glue; verifier is
 # the no_std sim core; blake2b-ref is the no_std ckb-default-hash; the linked-list
