@@ -1,4 +1,5 @@
 import { mulberry32 } from '../core/rng';
+import { dsinFull } from '../core/trig';
 
 export interface TerrainMask {
   width: number;
@@ -20,9 +21,9 @@ export function generateHeightmap(width: number, seed: number): Float32Array {
   for (let x = 0; x < width; x++) {
     const t = x / (width - 1);
     let v = 0;
-    for (const o of octaves) v += o.amp * Math.sin(t * Math.PI * 2 * o.freq + o.phase);
+    for (const o of octaves) v += o.amp * dsinFull(t * Math.PI * 2 * o.freq + o.phase);
     const normalized = 0.5 + 0.5 * v;       // sine sum -> [0,1]-ish
-    const envelope = Math.sin(Math.PI * t);   // 0 at edges, 1 in the middle
+    const envelope = dsinFull(Math.PI * t);   // 0 at edges, 1 in the middle
     h[x] = Math.max(0, Math.min(1, normalized * envelope));
   }
   return h;

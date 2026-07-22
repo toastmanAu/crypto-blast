@@ -1,11 +1,48 @@
 use blake2b_ref::Blake2bBuilder;
 use std::fs;
 use verifier::ckbhash;
+use verifier::generate_terrain_mask;
+use verifier::next_random;
 use verifier::quantize;
-use verifier::{load_fixture_world, serialize_world};
+use verifier::{create_world, load_fixture_world, serialize_world};
+use verifier::{dcos, dsin, dsin_full};
+use verifier::{step_projectile, weapon_at, ProjectileState, Vec2};
+use verifier::{step_world, TickInput};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+fn replay_commit(path_json: &str) -> String {
+    let raw = std::fs::read_to_string(path_json).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let seed = v["seed"].as_i64().unwrap() as i32;
+    let mut w = create_world(seed, 1280, 720);
+    for inp in v["inputs"].as_array().unwrap() {
+        let g = |k: &str| inp[k].as_bool().unwrap_or(false);
+        let sw = inp.get("selectWeapon").and_then(|x| x.as_i64()).map(|n| n as i32);
+        let input = TickInput {
+            aim_up: g("aimUp"),
+            aim_down: g("aimDown"),
+            aim_left: g("aimLeft"),
+            aim_right: g("aimRight"),
+            fire_held: g("fireHeld"),
+            fire_pressed: g("firePressed"),
+            fire_released: g("fireReleased"),
+            select_weapon: sw,
+        };
+        step_world(&mut w, &input);
+    }
+    format!("0x{}", hex(&ckbhash(&serialize_world(&w))))
+}
+
+#[test]
+fn tape_replays_match_ts_commitment() {
+    for name in ["demo", "turnloop", "selectfire"] {
+        let want = std::fs::read_to_string(format!("tests/tape-{name}.hash")).unwrap();
+        let got = replay_commit(&format!("tests/tape-{name}.json"));
+        assert_eq!(got, want.trim(), "tape {name} commitment diverges");
+    }
 }
 
 #[test]
@@ -45,6 +82,20 @@ fn commit_over_exported_bytes_matches_golden() {
 }
 
 #[test]
+fn next_random_matches_ts_vectors() {
+    let txt = std::fs::read_to_string("tests/fixture-rng.txt").expect("run export-fixture.ts");
+    for line in txt.lines() {
+        let parts: Vec<&str> = line.split('|').collect();
+        let state: i32 = parts[0].parse::<i64>().unwrap() as i32;
+        let want_value: f64 = parts[1].parse().unwrap();
+        let want_next: i32 = parts[2].parse::<i64>().unwrap() as i32;
+        let (value, next) = next_random(state);
+        assert_eq!(value, want_value, "value mismatch for state {state}");
+        assert_eq!(next, want_next, "next mismatch for state {state}");
+    }
+}
+
+#[test]
 fn blake2b_ref_matches_golden_and_ckbhash() {
     let bytes = fs::read("tests/fixture-initial.bin").expect("run scripts/export-fixture.ts");
     let golden = fs::read_to_string("tests/fixture-initial.hash").unwrap();
@@ -61,7 +112,10 @@ fn blake2b_ref_matches_golden_and_ckbhash() {
     let ref_hex = hex(&out);
 
     // Pin no_std path to the golden commitment file.
-    assert_eq!(ref_hex, golden, "blake2b-ref diverges from fixture-initial.hash");
+    assert_eq!(
+        ref_hex, golden,
+        "blake2b-ref diverges from fixture-initial.hash"
+    );
 
     // Pin no_std path to the std blake2b-rs path so both are locked to each other.
     assert_eq!(
@@ -69,4 +123,111 @@ fn blake2b_ref_matches_golden_and_ckbhash() {
         hex(&ckbhash(&bytes)),
         "blake2b-ref and ckbhash (blake2b-rs) diverge"
     );
+}
+
+#[test]
+fn terrain_mask_matches_ts_fixture() {
+    // The committed fixture-mask.bin is the TS generateTerrainMask(1280,720,1234).data
+    let want = std::fs::read("tests/fixture-mask.bin").unwrap();
+    let mask = generate_terrain_mask(1280, 720, 1234);
+    assert_eq!(mask.data.len(), want.len(), "mask length");
+    assert_eq!(mask.data, want, "terrain mask bytes diverge from TS");
+}
+
+#[test]
+fn trig_matches_ts_bitexact() {
+    let t = std::fs::read_to_string("tests/fixture-trig.txt").unwrap();
+    for line in t.lines() {
+        let p: Vec<&str> = line.split('|').collect();
+        let x: f64 = p[0].parse().unwrap();
+        assert_eq!(dsin(x), p[1].parse::<f64>().unwrap(), "dsin({x})");
+        assert_eq!(dcos(x), p[2].parse::<f64>().unwrap(), "dcos({x})");
+    }
+    let f = std::fs::read_to_string("tests/fixture-trig-full.txt").unwrap();
+    for line in f.lines() {
+        let p: Vec<&str> = line.split('|').collect();
+        let x: f64 = p[0].parse().unwrap();
+        assert_eq!(dsin_full(x), p[1].parse::<f64>().unwrap(), "dsin_full({x})");
+    }
+}
+
+#[test]
+fn weapons_and_aim_basics() {
+    use verifier::{aim_angle, create_aim, update_charge, weapon_at};
+
+    // weapon table spot-checks (id index, launch speed, ammo, wind susceptibility)
+    let w0 = weapon_at(0);
+    assert_eq!(w0.launch_speed, 760.0);
+    assert_eq!(w0.ammo_start, -1);
+    let w1 = weapon_at(1);
+    assert_eq!(w1.projectile.wind_susceptibility, 1.0_f64 / 3.0);
+    let w3 = weapon_at(3);
+    assert_eq!(w3.projectile.wind_susceptibility, 1.0_f64 / 6.0);
+
+    // aim: facing-right launch angle == elevation (45° default)
+    let a = create_aim(1);
+    assert_eq!(aim_angle(&a), std::f64::consts::FRAC_PI_4);
+    // charge accrues power = dt / CHARGE_SECONDS per tick
+    let mut a2 = create_aim(1);
+    a2.is_charging = true;
+    a2.power = 0.0;
+    update_charge(&mut a2, 1.0 / 50.0);
+    assert_eq!(a2.power, (1.0 / 50.0) / 1.2);
+}
+
+#[test]
+fn step_projectile_matches_ts_bitexact() {
+    let txt = std::fs::read_to_string("tests/fixture-projectile.txt").unwrap();
+    let params = weapon_at(1).projectile;
+    let mut st = ProjectileState {
+        pos: Vec2 { x: 100.0, y: 100.0 },
+        vel: Vec2 {
+            x: 200.0,
+            y: -300.0,
+        },
+    };
+    for (i, line) in txt.lines().enumerate() {
+        st = step_projectile(&st, &params, 50.0, 1.0 / 50.0 / 4.0);
+        let p: Vec<f64> = line.split('|').map(|s| s.parse().unwrap()).collect();
+        assert_eq!(
+            (st.pos.x, st.pos.y, st.vel.x, st.vel.y),
+            (p[0], p[1], p[2], p[3]),
+            "step {i}"
+        );
+    }
+}
+
+#[test]
+fn step_world_advances_tick_deterministically() {
+    let idle = TickInput {
+        aim_up: false,
+        aim_down: false,
+        aim_left: false,
+        aim_right: false,
+        fire_held: false,
+        fire_pressed: false,
+        fire_released: false,
+        select_weapon: None,
+    };
+    let mut a = create_world(7, 1280, 720);
+    let mut b = create_world(7, 1280, 720);
+    step_world(&mut a, &idle);
+    step_world(&mut b, &idle);
+    assert_eq!(a.tick, 1);
+    assert_eq!(serialize_world(&a), serialize_world(&b));
+}
+
+#[test]
+fn create_world_serializes_to_ts_fixture() {
+    // Native create_world (incl. native terrain) must serialize to the SAME bytes
+    // TS produced — proves full initial-state parity end-to-end.
+    let want_bytes = std::fs::read("tests/fixture-initial.bin").unwrap();
+    let want_hash = std::fs::read_to_string("tests/fixture-initial.hash").unwrap();
+    let w = create_world(1234, 1280, 720);
+    let bytes = serialize_world(&w);
+    assert_eq!(
+        bytes, want_bytes,
+        "create_world serialization diverges from TS"
+    );
+    assert_eq!(format!("0x{}", hex(&ckbhash(&bytes))), want_hash.trim());
 }

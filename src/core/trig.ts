@@ -46,3 +46,16 @@ export function dcos(x: number): number {
   const arg = HALF_PI - x;
   return arg < 0 ? -sinQuarter(-arg) : sinQuarter(arg);
 }
+
+const TWO_PI = Math.PI * 2;
+
+/** Deterministic sine for ANY real x: range-reduce mod 2π, then fold to [0,π]
+ *  and reuse the [0,π/2] Taylor core. Uses only +,-,*,/ and floor — no Math.sin. */
+export function dsinFull(x: number): number {
+  // reduce to [0, 2π)
+  let r = x - TWO_PI * Math.floor(x / TWO_PI);
+  if (r < 0) r += TWO_PI; // guard fp edge
+  // sin over [0, 2π): for [π, 2π) use sin(r) = -sin(r - π)
+  if (r > PI) return -dsin(r - PI);
+  return dsin(r); // dsin already folds [0,π] -> [0,π/2]
+}
