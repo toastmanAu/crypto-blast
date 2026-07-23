@@ -24,6 +24,12 @@ export const APE_GRAVITY = 900; // px/s^2 — apes fall faster than projectiles
 export const APE_WIDTH = 24;
 export const APE_HEIGHT = 36;
 export const MAX_WIND = 220; // px/s^2 at full strength
+export const APE_WALK_SPEED = 80; // px/s horizontal walk speed (active ape, grounded)
+export const APE_JUMP_SPEED = 420; // px/s upward launch on jump
+export const MAX_STEP = 10; // max surface rise (px) the walking ape climbs per tick
+export const WALK_BUDGET = 112.5; // px of movement allotted per turn (resets each turn)
+export const JUMP_COST = 40; // px a jump draws from the turn's movement budget
+const JUMP_LIFT = 2; // px nudge to clear the ground probe so a jump goes airborne
 const SHOT_SUBSTEPS = 4; // anti-tunnelling sub-steps per tick
 
 // --- P2 turn-loop constants ---
@@ -70,6 +76,7 @@ export interface WorldState {
   phase: Phase;
   turnTimer: number;     // ticks left in AIMING
   resolveTimer: number;  // ticks elapsed in RESOLVING (spiral guard)
+  moveBudget: number;    // px of movement left this turn (walk drains it, jump costs a chunk)
   teamNext: [number, number]; // next roster position to act, per team
   winner: number | null; // team index, -1 draw, null ongoing
   selectedWeapon: number; // sticky WEAPON_ORDER index, default 0
@@ -84,6 +91,9 @@ export interface TickInput {
   aimDown: boolean;
   aimLeft?: boolean;  // face left this tick
   aimRight?: boolean; // face right this tick
+  moveLeft?: boolean;   // walk left this tick (active ape, grounded, AIMING)
+  moveRight?: boolean;  // walk right this tick
+  jumpPressed?: boolean; // jump this tick (edge-triggered; grounded only)
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
@@ -136,6 +146,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     phase: 'AIMING',
     turnTimer: TURN_TICKS,
     resolveTimer: 0,
+    moveBudget: WALK_BUDGET,
     teamNext: [1, 0],        // team 0 already acting at pos 0; next is pos 1
     winner: null,
     selectedWeapon: 0,
@@ -162,10 +173,14 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   world.events.length = 0;
 
   if (world.phase === 'GAMEOVER') {
-    settleApes(world);
+    settleApes(world, 0);
     world.tick++;
     return;
   }
+
+  // Direction the active ape is walking this tick (0 = not walking). Threaded into
+  // settleApes so only deliberate walking step-climbs slopes; knockback never does.
+  let walkDir = 0;
 
   if (world.phase === 'AIMING') {
     if (input.selectWeapon !== undefined) {
@@ -176,6 +191,28 @@ export function stepWorld(world: WorldState, input: TickInput): void {
       }
     }
     const aim = world.aim;
+
+    // Active-ape locomotion (its turn only). Walking drives velX directly; ground
+    // friction in settleApes only slows the ape once input stops (a short slide).
+    // Jumping nudges y up off the ground probe so settleApes goes airborne WITHOUT
+    // changing the shared settle physics — kept byte-identical to the on-chain verifier.
+    const mover = world.apes[world.activeApe];
+    if (isSolid(world.mask, mover.x, mover.y + APE_HEIGHT / 2 + 1)) {
+      const dir = (input.moveRight ? 1 : 0) - (input.moveLeft ? 1 : 0);
+      // Jump first so the walk step below can't nibble the budget a jump needs.
+      if (input.jumpPressed && world.moveBudget >= JUMP_COST) {
+        mover.velY = -APE_JUMP_SPEED;
+        mover.y -= JUMP_LIFT;
+        world.moveBudget -= JUMP_COST;
+      }
+      if (dir !== 0 && world.moveBudget > 0) {
+        mover.velX = dir * APE_WALK_SPEED;
+        setFacing(aim, dir); // face the way we walk
+        walkDir = dir;
+        world.moveBudget -= APE_WALK_SPEED * FIXED_DT; // drain the allotted step
+      }
+    }
+
     if (input.aimUp) adjustElevation(aim, 1, FIXED_DT);
     if (input.aimDown) adjustElevation(aim, -1, FIXED_DT);
     if (input.aimLeft) setFacing(aim, -1);
@@ -196,7 +233,7 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   }
 
   advanceShot(world);
-  settleApes(world);
+  settleApes(world, walkDir);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -265,6 +302,7 @@ function rerollTurn(world: WorldState): void {
   world.aim = createAim(world.apes[world.activeApe].team === 0 ? 1 : -1);
   world.turnTimer = TURN_TICKS;
   world.resolveTimer = 0;
+  world.moveBudget = WALK_BUDGET;
 }
 
 function fire(world: WorldState, power: number): void {
@@ -292,17 +330,41 @@ function fire(world: WorldState, power: number): void {
   }
 }
 
-function settleApes(world: WorldState): void {
-  for (const ape of world.apes) {
+function settleApes(world: WorldState, walkDir: number): void {
+  for (let i = 0; i < world.apes.length; i++) {
+    const ape = world.apes[i];
     ape.prevX = ape.x;
     ape.prevY = ape.y;
     if (!alive(ape, world.height)) continue; // dead apes don't move
 
-    // Horizontal: integrate velX, stop dead at a solid wall (probe at mid-height).
+    // Only deliberate walking step-climbs; knockback/idle keep the plain wall probe
+    // so blast physics stays byte-identical to before (and to the on-chain verifier).
+    const walking = i === world.activeApe && walkDir !== 0;
+
+    // Horizontal: integrate velX.
     if (ape.velX !== 0) {
       const nx = ape.x + ape.velX * FIXED_DT;
-      if (isSolid(world.mask, nx, ape.y)) ape.velX = 0;
-      else ape.x = nx;
+      if (walking && isSolid(world.mask, ape.x, ape.y + APE_HEIGHT / 2 + 1)) {
+        // Grounded walk: snap the feet onto the surface at nx so the ape climbs
+        // smooth slopes instead of burrowing into them (the mid-height probe alone
+        // only stops it once the ground rises ~19px). A rise over MAX_STEP is a wall.
+        const surf = columnSurface(world.mask, nx);
+        if (surf === null) {
+          if (!isSolid(world.mask, nx, ape.y)) ape.x = nx; // step off into a gap
+          else ape.velX = 0;
+        } else {
+          const targetY = surf - APE_HEIGHT / 2 - 1; // resting y: feet 1px above surf
+          const climb = ape.y - targetY;             // >0 = ground rose (uphill)
+          if (climb > MAX_STEP) ape.velX = 0;        // too steep — a wall
+          else if (climb > 0) { ape.x = nx; ape.y = targetY; } // step up onto it
+          else if (!isSolid(world.mask, nx, ape.y)) ape.x = nx; // flat / downhill
+          else ape.velX = 0;
+        }
+      } else if (isSolid(world.mask, nx, ape.y)) {
+        ape.velX = 0; // stop dead at a solid wall (probe at mid-height)
+      } else {
+        ape.x = nx;
+      }
     }
 
     // Vertical: gravity while airborne; on landing apply fall damage + friction.

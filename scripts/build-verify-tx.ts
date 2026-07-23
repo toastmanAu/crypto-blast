@@ -7,7 +7,7 @@
  *
  * Protocol (must match verifier/contract/src/main.rs exactly):
  *   lock.args        = seed(4 bytes LE) ‖ claimed_commitment(32 bytes)  ← 36 bytes
- *   witness[0].lock  = the binary tape (2 bytes/tick, from tapeToBytes)
+ *   witness[0].lock  = the binary tape (3 bytes/tick, from tapeToBytes)
  *   code_hash        = Type-ID args of the deployed verifier-lock binary
  *   hash_type        = "type"
  *
@@ -50,7 +50,7 @@ export interface AssembleVerifyTxInput {
   seed: number;
   /** 0x-prefixed 32-byte hex — the claimed_commitment baked into lock.args. */
   commitment: string;
-  /** Raw tape bytes (2 bytes/tick) produced by tapeToBytes. */
+  /** Raw tape bytes (3 bytes/tick, format v2) produced by tapeToBytes. */
   tapeBytes: Uint8Array;
 }
 

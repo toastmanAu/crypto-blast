@@ -34,6 +34,12 @@ const SPAWN_SPAN: f64 = 0.28;
 
 // --- stepWorld / turn-loop / physics constants, ported from src/sim/World.ts ---
 const APE_GRAVITY: f64 = 900.0; // px/s^2 — apes fall faster than projectiles
+const APE_WALK_SPEED: f64 = 80.0; // px/s horizontal walk speed (active ape, grounded)
+const APE_JUMP_SPEED: f64 = 420.0; // px/s upward launch on jump
+const MAX_STEP: f64 = 10.0; // max surface rise (px) the walking ape climbs per tick
+const WALK_BUDGET: f64 = 112.5; // px of movement allotted per turn (resets each turn)
+const JUMP_COST: f64 = 40.0; // px a jump draws from the turn's movement budget
+const JUMP_LIFT: f64 = 2.0; // px nudge to clear the ground probe so a jump goes airborne
 const SHOT_SUBSTEPS: usize = 4; // anti-tunnelling sub-steps per tick
 const RESOLVE_MAX_TICKS: i64 = 400; // 8 s spiral guard for the settle wait
 const KNOCKBACK: f64 = 320.0; // px/s impulse at blast centre
@@ -98,6 +104,9 @@ pub struct WorldState {
     pub turn_timer: i64,
     #[cfg_attr(feature = "std", serde(rename = "resolveTimer"))]
     pub resolve_timer: i64,
+    /// Px of movement left this turn (walk drains it, a jump costs a chunk).
+    #[cfg_attr(feature = "std", serde(rename = "moveBudget"))]
+    pub move_budget: f64,
     /// `null` while the match is ongoing; `-1` for a draw; otherwise a team
     /// index. Encoded as `winner ?? 99`.
     pub winner: Option<i64>,
@@ -161,6 +170,7 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
     w.u32(world.active_ape);
     w.u32(world.turn_timer);
     w.u32(world.resolve_timer);
+    w.f(world.move_budget);
     w.u32(world.winner.unwrap_or(99));
     w.u32(world.team_next[0]);
     w.u32(world.team_next[1]);
@@ -250,6 +260,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         active_ape: 0,
         turn_timer: TURN_TICKS,
         resolve_timer: 0,
+        move_budget: WALK_BUDGET,
         winner: None,
         team_next: [1, 0],
         wind: (value * 2.0 - 1.0) * MAX_WIND,
@@ -294,6 +305,9 @@ pub struct TickInput {
     pub aim_down: bool,
     pub aim_left: bool,
     pub aim_right: bool,
+    pub move_left: bool,
+    pub move_right: bool,
+    pub jump_pressed: bool,
     pub fire_held: bool,
     pub fire_pressed: bool,
     pub fire_released: bool,
@@ -333,10 +347,14 @@ pub fn muzzle(world: &WorldState) -> Vec2 {
 /// part of the serialized state, so it has no Rust counterpart.
 pub fn step_world(world: &mut WorldState, input: &TickInput) {
     if world.phase == "GAMEOVER" {
-        settle_apes(world);
+        settle_apes(world, 0);
         world.tick += 1;
         return;
     }
+
+    // Direction the active ape walks this tick (0 = not). Threaded into settle_apes
+    // so only deliberate walking step-climbs; knockback never does. Mirrors TS.
+    let mut walk_dir: i32 = 0;
 
     if world.phase == "AIMING" {
         if let Some(i) = input.select_weapon {
@@ -345,6 +363,32 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
                 world.selected_weapon = i as i64;
             }
         }
+
+        // Active-ape locomotion (its turn only). Walking drives vel_x directly;
+        // jumping nudges y up off the ground probe so settle_apes goes airborne.
+        // Byte-exact port of the TS AIMING-block locomotion.
+        let active = world.active_ape as usize;
+        let (mx, my) = {
+            let mover = &world.apes[active];
+            (mover.x, mover.y)
+        };
+        if is_solid(&world.mask, mx, my + APE_HEIGHT / 2.0 + 1.0) {
+            let dir: i32 =
+                (if input.move_right { 1 } else { 0 }) - (if input.move_left { 1 } else { 0 });
+            // Jump first so the walk step below can't nibble the budget a jump needs.
+            if input.jump_pressed && world.move_budget >= JUMP_COST {
+                world.apes[active].vel_y = -APE_JUMP_SPEED;
+                world.apes[active].y -= JUMP_LIFT;
+                world.move_budget -= JUMP_COST;
+            }
+            if dir != 0 && world.move_budget > 0.0 {
+                world.apes[active].vel_x = dir as f64 * APE_WALK_SPEED;
+                set_facing(&mut world.aim, dir);
+                walk_dir = dir;
+                world.move_budget -= APE_WALK_SPEED * FIXED_DT; // drain the allotted step
+            }
+        }
+
         if input.aim_up {
             adjust_elevation(&mut world.aim, 1.0, FIXED_DT);
         }
@@ -382,7 +426,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
     }
 
     advance_shot(world);
-    settle_apes(world);
+    settle_apes(world, walk_dir);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -483,6 +527,7 @@ fn reroll_turn(world: &mut WorldState) {
     world.aim = create_aim(facing);
     world.turn_timer = TURN_TICKS;
     world.resolve_timer = 0;
+    world.move_budget = WALK_BUDGET;
 }
 
 /// Ported from `fire` in `src/sim/World.ts`.
@@ -522,18 +567,50 @@ fn fire(world: &mut WorldState, power: f64) {
 /// Ported from `settleApes` in `src/sim/World.ts`. (`prevX`/`prevY` are render
 /// interpolation only — not serialized, not read by any deterministic logic —
 /// so they have no Rust counterpart.)
-fn settle_apes(world: &mut WorldState) {
+fn settle_apes(world: &mut WorldState, walk_dir: i32) {
     let height = world.mask.height as f64;
-    for ape in world.apes.iter_mut() {
+    let active = world.active_ape as usize;
+    for (i, ape) in world.apes.iter_mut().enumerate() {
         if !alive(ape, height) {
             continue; // dead apes don't move
         }
 
-        // Horizontal: integrate velX, stop dead at a solid wall (mid-height probe).
+        // Only deliberate walking step-climbs; knockback/idle keep the plain wall
+        // probe so blast physics stays byte-identical. Mirrors TS settleApes.
+        let walking = i == active && walk_dir != 0;
+
+        // Horizontal: integrate vel_x.
         if ape.vel_x != 0.0 {
             let nx = ape.x + ape.vel_x * FIXED_DT;
-            if is_solid(&world.mask, nx, ape.y) {
-                ape.vel_x = 0.0;
+            if walking && is_solid(&world.mask, ape.x, ape.y + APE_HEIGHT / 2.0 + 1.0) {
+                // Grounded walk: snap the feet onto the surface at nx so the ape
+                // climbs smooth slopes instead of burrowing into them. A rise over
+                // MAX_STEP is a wall.
+                match column_surface(&world.mask, nx) {
+                    None => {
+                        if !is_solid(&world.mask, nx, ape.y) {
+                            ape.x = nx; // step off into a gap
+                        } else {
+                            ape.vel_x = 0.0;
+                        }
+                    }
+                    Some(surf) => {
+                        let target_y = surf as f64 - APE_HEIGHT / 2.0 - 1.0; // feet 1px above surf
+                        let climb = ape.y - target_y; // >0 = ground rose (uphill)
+                        if climb > MAX_STEP {
+                            ape.vel_x = 0.0; // too steep — a wall
+                        } else if climb > 0.0 {
+                            ape.x = nx;
+                            ape.y = target_y; // step up onto it
+                        } else if !is_solid(&world.mask, nx, ape.y) {
+                            ape.x = nx; // flat / downhill
+                        } else {
+                            ape.vel_x = 0.0;
+                        }
+                    }
+                }
+            } else if is_solid(&world.mask, nx, ape.y) {
+                ape.vel_x = 0.0; // stop dead at a solid wall (mid-height probe)
             } else {
                 ape.x = nx;
             }

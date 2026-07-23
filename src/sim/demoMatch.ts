@@ -42,6 +42,21 @@ export function turnLoopInputs(): TickInput[] {
   return inputs;
 }
 
+/** Walk + jump the active ape across the terrain — exercises the movement input
+ *  flags, slope step-climb, and the per-turn movement budget on-chain (no firing,
+ *  so it stays one AIMING turn). The opening hop drains JUMP_COST; the long walk
+ *  then runs the budget dry, proving the cap is enforced identically on-chain. */
+export function moveInputs(): TickInput[] {
+  const inputs: TickInput[] = [];
+  inputs.push(mk({ jumpPressed: true }));         // opening hop — costs JUMP_COST
+  for (let t = 0; t < 40; t++) inputs.push(idle); // land + settle
+  // 80px/s = 1.6px/tick; the ~72.5px left in the budget (112.5 − JUMP_COST) runs out
+  // well before these ticks elapse, so the ape walks to the cap and the rest are no-ops.
+  for (let t = 0; t < 260; t++) inputs.push(mk({ moveRight: true }));
+  for (let t = 0; t < 40; t++) inputs.push(idle); // settle to rest
+  return inputs;
+}
+
 /** Select watermelon (index 3), aim, charge, fire — exercises the selectWeapon path. */
 export function selectThenFireInputs(): TickInput[] {
   const inputs: TickInput[] = [];

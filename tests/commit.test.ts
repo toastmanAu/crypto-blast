@@ -55,12 +55,12 @@ describe('canonical-serialization freeze (golden vectors)', () => {
   // WEAPON_ORDER being append-only.
   it('fresh world (seed 1234) commits to its frozen vector', () => {
     expect(toHex(commitWorld(createWorld(1234, W, H))))
-      .toBe('0x3ab2c2e7f356faaa55d3895a6d0990ecf185801e3d59b11975032fd53c75816b');
+      .toBe('0x3b428b19482ffec6de53ec0db7fdc32330565ce0162c3ab1c9c0e658fdc00963');
   });
 
   it('demo match replay commits to its frozen vector', () => {
     expect(toHex(commitWorld(replay(demoTape(1234, W, H)))))
-      .toBe('0x8dd41dc65a2da6d35ebd9fe49d1a3a1b77f135a64013aa479295a577dee7ed76');
+      .toBe('0x9dbdf1ef1ab6f52b30216aecedcb185b314675f868de05419346b6497b8f6a89');
   });
 });
 

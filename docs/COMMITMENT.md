@@ -73,20 +73,21 @@ the same append-only contract as `WEAPON_ORDER`):
 | 4 | `activeApe` | u32 |
 | 5 | `turnTimer` | u32 |
 | 6 | `resolveTimer` | u32 |
-| 7 | `winner ?? 99` | u32 |
-| 8 | `teamNext[0]` | u32 |
-| 9 | `teamNext[1]` | u32 |
-| 10 | `wind` | f |
-| 11 | per ape (in placement order, team 0 first): `team` u32, then `health, x, y, velX, velY` each f | u32 + 5×f |
-| 12 | `aim.facing` | u32 |
-| 13 | `aim.elevation` | f |
-| 14 | `aim.power` | f |
-| 15 | `aim.isCharging ? 1 : 0` | u32 |
-| 16 | `selectedWeapon` | u32 |
-| 17 | `ammo[team][weapon]` for every team, every weapon (row-major) | u32 each |
-| 18 | `shot ? 1 : 0` | u32 |
-| 19 | if shot present: `pos.x, pos.y, vel.x, vel.y` each f, then `weapon` u32 | 4×f + u32 |
-| 20 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
+| 7 | `moveBudget` | f |
+| 8 | `winner ?? 99` | u32 |
+| 9 | `teamNext[0]` | u32 |
+| 10 | `teamNext[1]` | u32 |
+| 11 | `wind` | f |
+| 12 | per ape (in placement order, team 0 first): `team` u32, then `health, x, y, velX, velY` each f | u32 + 5×f |
+| 13 | `aim.facing` | u32 |
+| 14 | `aim.elevation` | f |
+| 15 | `aim.power` | f |
+| 16 | `aim.isCharging ? 1 : 0` | u32 |
+| 17 | `selectedWeapon` | u32 |
+| 18 | `ammo[team][weapon]` for every team, every weapon (row-major) | u32 each |
+| 19 | `shot ? 1 : 0` | u32 |
+| 20 | if shot present: `pos.x, pos.y, vel.x, vel.y` each f, then `weapon` u32 | 4×f + u32 |
+| 21 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
 
 Render-only fields (`prevX/prevY`, `prevPos`, the per-tick `events` array) are
 **not** serialized and have no effect on the commitment.
@@ -125,7 +126,7 @@ proves the measured cycles are for the *correct* computation.
 | Measurement | Binary | Cycles | Notes |
 |-------------|--------|-------:|-------|
 | **Phase 0 — commit only** | `verifier/bench` `bench` | **24,679,515 (23.5M)** | blake2b-256 over the 921,988-byte canonical fixture; no sim, no alloc. The hashing floor. |
-| **Phase 1 — full match** | `verifier/bench` `replay` | **55,010,368 (52.5M)** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0x8dd41dc6…ed76`. |
+| **Phase 1 — full match** | `verifier/bench` `replay` | **55,010,368 (52.5M)** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0x9dbdf1ef…6a89`. |
 
 **Phase-1 gate: 52.5M cycles vs xxuejie's ~150M reference → ~2.7× under budget.**
 The full replay costs only ~30M cycles more than the hash alone, i.e. the entire
@@ -224,18 +225,21 @@ lock.args = seed (4 bytes, little-endian i32)
 ```
 
 The spending input's `WitnessArgs.lock` carries the **binary tape** — the
-compact 2-bytes-per-tick encoding produced by
+compact 3-bytes-per-tick encoding (format v2) produced by
 [`src/sim/tapeBinary.ts`](../src/sim/tapeBinary.ts) and consumed by
 `verifier/src/tape.rs`:
 
 ```
-byte0 = bool flags  (bit0 aimUp, bit1 aimDown, bit2 aimLeft, bit3 aimRight,
-                     bit4 fireHeld, bit5 firePressed, bit6 fireReleased; bit7 = 0)
-byte1 = selectWeapon (0–5, or 0xFF = none)
+byte0 = flags low  (bit0 aimUp, bit1 aimDown, bit2 aimLeft, bit3 aimRight,
+                    bit4 fireHeld, bit5 firePressed, bit6 fireReleased, bit7 moveLeft)
+byte1 = flags high (bit0 moveRight, bit1 jumpPressed; bits 2–7 reserved)
+byte2 = selectWeapon (0–5, or 0xFF = none)
 ```
 
-Tick count = `tape_bytes.len() / 2`. The seed is NOT in the tape; it lives in
-the lock args and is immutable once the cell is created.
+Format v2 expanded the legacy 2-byte layout (which had no movement bits) so
+walk/jump input is verifiable on-chain; it invalidates tapes encoded under the
+old layout. Tick count = `tape_bytes.len() / 3`. The seed is NOT in the tape; it
+lives in the lock args and is immutable once the cell is created.
 
 ### Unlock condition (the kernel algorithm)
 

@@ -242,8 +242,8 @@ pub fn decode_forfeit_evidence(bytes: &[u8]) -> Option<ForfeitEvidence<'_>> {
 ///
 /// Borrows directly from the envelope byte slice — zero copy.
 pub struct AttestedBlock<'a> {
-    /// Raw tape bytes for this turn.  Two bytes per tick; decode with
-    /// [`decode_tape`](crate::decode_tape).
+    /// Raw tape bytes for this turn.  Three bytes per tick (format v2); decode
+    /// with [`decode_tape`](crate::decode_tape).
     pub tape_bytes: &'a [u8],
 
     /// 65-byte compact signature: `[v(1) ‖ r(32) ‖ s(32)]`.

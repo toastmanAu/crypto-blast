@@ -51,6 +51,7 @@ dependencies = [
 name = "verifier"
 version = "0.0.0"
 dependencies = [
+ "blake2b-ref",
  "libm",
 ]
 
