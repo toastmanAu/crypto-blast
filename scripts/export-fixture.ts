@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import { createWorld, commitWorld } from '../src/sim/World';
 import { serializeWorld, toHex } from '../src/sim/serialize';
 import { nextRandom } from '../src/core/rng';
-import { demoInputs, turnLoopInputs, selectThenFireInputs } from '../src/sim/demoMatch';
+import { demoInputs, turnLoopInputs, selectThenFireInputs, moveInputs } from '../src/sim/demoMatch';
 import { createTape, recordTick, replay } from '../src/sim/tape';
 
 const w = createWorld(1234, 1280, 720);
@@ -62,9 +62,10 @@ function dumpTape(name: string, seed: number, inputs: ReturnType<typeof demoInpu
 dumpTape('demo', 1234, demoInputs());
 dumpTape('turnloop', 1234, turnLoopInputs());
 dumpTape('selectfire', 7, selectThenFireInputs());
+dumpTape('move', 1234, moveInputs());
 
 import { tapeToBytes } from '../src/sim/tapeBinary';
-for (const name of ['demo', 'turnloop', 'selectfire']) {
+for (const name of ['demo', 'turnloop', 'selectfire', 'move']) {
   const t = JSON.parse(readFileSync(`verifier/tests/tape-${name}.json`, 'utf8'));
   writeFileSync(`verifier/tests/tape-${name}.bin`, Buffer.from(tapeToBytes(t.inputs)));
   console.log(`exported tape-${name}.bin (${t.inputs.length} ticks)`);

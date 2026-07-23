@@ -18,7 +18,7 @@ the commitment also in lock args.
 Protocol:
 ```
 lock.args       = seed(4 bytes LE) ‖ claimed_commitment(32 bytes)   [36 bytes]
-witness[0].lock = the binary tape (2 bytes/tick)
+witness[0].lock = the binary tape (3 bytes/tick, format v2)
 code_hash       = Type-ID args of the deployed binary
 hash_type       = "type"
 ```

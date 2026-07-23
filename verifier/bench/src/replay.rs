@@ -113,6 +113,10 @@ pub extern "C" fn _start() -> ! {
             aim_down,
             aim_left,
             aim_right,
+            // The embedded demo tape predates movement; its ticks carry no walk/jump.
+            move_left: false,
+            move_right: false,
+            jump_pressed: false,
             fire_held,
             fire_pressed,
             fire_released,

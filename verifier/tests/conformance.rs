@@ -27,6 +27,9 @@ fn replay_commit(path_json: &str) -> String {
             aim_down: g("aimDown"),
             aim_left: g("aimLeft"),
             aim_right: g("aimRight"),
+            move_left: g("moveLeft"),
+            move_right: g("moveRight"),
+            jump_pressed: g("jumpPressed"),
             fire_held: g("fireHeld"),
             fire_pressed: g("firePressed"),
             fire_released: g("fireReleased"),
@@ -39,7 +42,7 @@ fn replay_commit(path_json: &str) -> String {
 
 #[test]
 fn tape_replays_match_ts_commitment() {
-    for name in ["demo", "turnloop", "selectfire"] {
+    for name in ["demo", "turnloop", "selectfire", "move"] {
         let want = std::fs::read_to_string(format!("tests/tape-{name}.hash")).unwrap();
         let got = replay_commit(&format!("tests/tape-{name}.json"));
         assert_eq!(got, want.trim(), "tape {name} commitment diverges");
@@ -205,6 +208,9 @@ fn step_world_advances_tick_deterministically() {
         aim_down: false,
         aim_left: false,
         aim_right: false,
+        move_left: false,
+        move_right: false,
+        jump_pressed: false,
         fire_held: false,
         fire_pressed: false,
         fire_released: false,
@@ -235,7 +241,7 @@ fn create_world_serializes_to_ts_fixture() {
 
 #[test]
 fn binary_tape_decodes_and_replays_to_ts_commitment() {
-    for (name, seed) in [("demo", 1234), ("turnloop", 1234), ("selectfire", 7)] {
+    for (name, seed) in [("demo", 1234), ("turnloop", 1234), ("selectfire", 7), ("move", 1234)] {
         let bytes = std::fs::read(format!("tests/tape-{name}.bin")).unwrap();
         let want = std::fs::read_to_string(format!("tests/tape-{name}.hash")).unwrap();
         let mut w = create_world(seed, 1280, 720);

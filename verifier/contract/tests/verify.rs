@@ -3,7 +3,7 @@
 //! Builds a transaction whose single input is locked by the deployed verifier
 //! kernel, where:
 //!   * `lock.args  = seed(4 bytes LE) ‖ claimed_commitment(32 bytes)`  (36 bytes)
-//!   * `witness[0].lock = the binary tape` (2 bytes/tick, from tapeToBytes)
+//!   * `witness[0].lock = the binary tape` (3 bytes/tick format v2, from tapeToBytes)
 //!
 //! The kernel replays the tape from `seed` over a fixed 1280x720 world and
 //! unlocks (exit 0) iff blake2b-256(serialize_world) == claimed_commitment.

@@ -53,6 +53,9 @@ interface FrameInput {
   aimDown: boolean;
   aimLeft: boolean;
   aimRight: boolean;
+  moveLeft: boolean;
+  moveRight: boolean;
+  jumpPressed: boolean;
   fireHeld: boolean;
   firePressed: boolean;
   fireReleased: boolean;
@@ -73,6 +76,7 @@ export class GameScene extends Phaser.Scene {
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
     aimUp: false, aimDown: false, aimLeft: false, aimRight: false,
+    moveLeft: false, moveRight: false, jumpPressed: false,
     fireHeld: false, firePressed: false, fireReleased: false,
   };
 
@@ -109,6 +113,9 @@ export class GameScene extends Phaser.Scene {
     down: Phaser.Input.Keyboard.Key;
     left: Phaser.Input.Keyboard.Key;
     right: Phaser.Input.Keyboard.Key;
+    walkLeft: Phaser.Input.Keyboard.Key;
+    walkRight: Phaser.Input.Keyboard.Key;
+    jump: Phaser.Input.Keyboard.Key;
     fire: Phaser.Input.Keyboard.Key;
     save: Phaser.Input.Keyboard.Key;
   };
@@ -231,6 +238,9 @@ export class GameScene extends Phaser.Scene {
       down: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN),
       left: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT),
       right: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT),
+      walkLeft: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+      walkRight: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+      jump: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W),
       fire: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
       save: keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T),
     };
@@ -287,6 +297,9 @@ export class GameScene extends Phaser.Scene {
     this.frameInput.aimDown = this.keys.down.isDown;
     this.frameInput.aimLeft = this.keys.left.isDown;
     this.frameInput.aimRight = this.keys.right.isDown;
+    this.frameInput.moveLeft = this.keys.walkLeft.isDown;
+    this.frameInput.moveRight = this.keys.walkRight.isDown;
+    if (Phaser.Input.Keyboard.JustDown(this.keys.jump)) this.frameInput.jumpPressed = true;
     this.frameInput.fireHeld = this.keys.fire.isDown;
     if (Phaser.Input.Keyboard.JustDown(this.keys.fire)) this.frameInput.firePressed = true;
     if (Phaser.Input.Keyboard.JustUp(this.keys.fire)) this.frameInput.fireReleased = true;
@@ -335,6 +348,9 @@ export class GameScene extends Phaser.Scene {
       aimDown: wheelOpen ? false : fi.aimDown,
       aimLeft: wheelOpen ? false : fi.aimLeft,
       aimRight: wheelOpen ? false : fi.aimRight,
+      moveLeft: wheelOpen ? false : fi.moveLeft,
+      moveRight: wheelOpen ? false : fi.moveRight,
+      jumpPressed: wheelOpen ? false : fi.jumpPressed,
       fireHeld: fi.fireHeld,
       firePressed: fi.firePressed,
       fireReleased: fi.fireReleased,
@@ -342,6 +358,7 @@ export class GameScene extends Phaser.Scene {
     };
     fi.firePressed = false;
     fi.fireReleased = false;
+    fi.jumpPressed = false;
     this.pendingSelect = undefined;
     return input;
   }
@@ -493,8 +510,9 @@ export class GameScene extends Phaser.Scene {
     const wName = weaponAt(w.selectedWeapon).name;
     const ammoVal = w.ammo[active.team][w.selectedWeapon];
     const ammoStr = ammoVal < 0 ? '∞' : String(ammoVal);
+    const movePx = Math.max(0, Math.ceil(w.moveBudget));
     this.hud.setText(
-      `Team ${teamName}   Time ${secs}s   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   Weapon ${wName} (${ammoStr})   [←/→ face · ↑/↓ aim · hold SPACE · T save]`,
+      `Team ${teamName}   Time ${secs}s   Move ${movePx}px   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   Weapon ${wName} (${ammoStr})   [A/D walk · W jump · ←/→ face · ↑/↓ aim · hold SPACE · T save]`,
     );
 
     if (w.phase === 'GAMEOVER') {

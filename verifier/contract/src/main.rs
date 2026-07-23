@@ -10,7 +10,7 @@
 //!
 //! Protocol (exact):
 //!   * `lock.args        = seed(4 bytes LE) ‖ claimed_commitment(32 bytes)`  (36 bytes)
-//!   * `witness[0].lock  = the binary tape` (2 bytes/tick, GroupInput)
+//!   * `witness[0].lock  = the binary tape` (3 bytes/tick format v2, GroupInput)
 //!   * world is FIXED 1280x720 (hardcoded here, NOT taken from args)
 //!   * commit = blake2b-256(personal "ckb-default-hash") over serialize_world
 //!   * exit 0 iff commit == claimed_commitment, else nonzero
