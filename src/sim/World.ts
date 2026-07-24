@@ -43,6 +43,8 @@ export const FALL_DAMAGE_SCALE = 0.05; // health lost per px/s over the threshol
 export const GAS_RADIUS = 50; // px radius of a Gas Grenade's lingering cloud
 export const GAS_TICKS = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
 export const GAS_DAMAGE_PER_TICK = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
+export const MINE_TRIGGER_RADIUS = 30; // px proximity radius that sets a mine off
+export const MINE_ARM_TICKS = 25; // arming delay (0.5 s) so the planter isn't instant-blasted
 const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
 
@@ -77,6 +79,18 @@ export interface GasCloud {
   damagePerTick: number;
 }
 
+/** A proximity mine planted by a Llama Bomb: arms after a short delay, then
+ *  detonates (blast) when any ape enters its trigger radius. Persists until
+ *  triggered. Serialized (affects outcome). */
+export interface Mine {
+  x: number;
+  y: number;
+  triggerRadius: number;
+  blastRadius: number;
+  damage: number;
+  armTicks: number; // ticks left until armed; >0 = still arming
+}
+
 export interface WorldState {
   width: number;
   height: number;
@@ -96,6 +110,7 @@ export interface WorldState {
   ammo: number[][];       // ammo[team][weaponIndex]; -1 = unlimited
   shot: ShotState | null;
   gasClouds: GasCloud[];  // lingering gas clouds (Gas Grenade); tick down + DoT each step
+  mines: Mine[];          // proximity mines (Llama Bomb); detonate when an ape nears
   mask: TerrainMask;
   events: SimEvent[];
 }
@@ -167,6 +182,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     ammo: [startAmmo.slice(), startAmmo.slice()],
     shot: null,
     gasClouds: [],
+    mines: [],
     mask,
     events: [],
   };
@@ -250,6 +266,7 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   advanceShot(world);
   settleApes(world, walkDir);
   updateGasClouds(world);
+  updateMines(world);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -424,9 +441,14 @@ function advanceShot(world: WorldState): void {
 }
 
 function detonate(world: WorldState, x: number, y: number, radius: number): void {
+  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
+  if (weapon.id === 'llamaBomb') {
+    // Plant an armed proximity mine; it detonates later, not on impact.
+    world.mines.push({ x, y, triggerRadius: MINE_TRIGGER_RADIUS, blastRadius: weapon.blastRadius, damage: weapon.damage, armTicks: MINE_ARM_TICKS });
+    return;
+  }
   carveCircle(world.mask, x, y, radius);
   world.events.push({ type: 'detonation', x, y, radius });
-  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
   if (weapon.id === 'bridge') teleportActiveApe(world, x, y);
   if (weapon.id === 'gasGrenade') {
@@ -446,6 +468,28 @@ function updateGasClouds(world: WorldState): void {
       if (dx * dx + dy * dy <= r2) ape.health -= cloud.damagePerTick;
     }
     if (--cloud.ticksLeft <= 0) world.gasClouds.splice(i, 1);
+  }
+}
+
+/** Arm mines and detonate any whose trigger radius an ape has entered. */
+function updateMines(world: WorldState): void {
+  for (let i = world.mines.length - 1; i >= 0; i--) {
+    const mine = world.mines[i];
+    if (mine.armTicks > 0) { mine.armTicks--; continue; }
+    const tr2 = mine.triggerRadius * mine.triggerRadius;
+    let triggered = false;
+    for (const ape of world.apes) {
+      if (!alive(ape, world.height)) continue;
+      const dx = ape.x - mine.x;
+      const dy = ape.y - mine.y;
+      if (dx * dx + dy * dy <= tr2) { triggered = true; break; }
+    }
+    if (triggered) {
+      carveCircle(world.mask, mine.x, mine.y, mine.blastRadius);
+      world.events.push({ type: 'detonation', x: mine.x, y: mine.y, radius: mine.blastRadius });
+      applyBlast(world, mine.x, mine.y, mine.blastRadius, mine.damage);
+      world.mines.splice(i, 1);
+    }
   }
 }
 

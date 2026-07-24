@@ -48,6 +48,8 @@ const FALL_DAMAGE_SCALE: f64 = 0.05; // health lost per px/s over the threshold
 const GAS_RADIUS: f64 = 50.0; // px radius of a Gas Grenade's lingering cloud
 const GAS_TICKS: i64 = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
 const GAS_DAMAGE_PER_TICK: f64 = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
+const MINE_TRIGGER_RADIUS: f64 = 30.0; // px proximity radius that sets a mine off
+const MINE_ARM_TICKS: i64 = 25; // arming delay (0.5 s) so the planter isn't instant-blasted
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
 /// The simulation's one and only timestep, in seconds (mirrors `FIXED_DT` in
@@ -105,6 +107,22 @@ pub struct GasCloud {
     pub damage_per_tick: f64,
 }
 
+/// A proximity mine planted by a Llama Bomb: arms after a short delay, then
+/// detonates when any ape enters its trigger radius. Mirrors TS `Mine`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct Mine {
+    pub x: f64,
+    pub y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "triggerRadius"))]
+    pub trigger_radius: f64,
+    #[cfg_attr(feature = "std", serde(rename = "blastRadius"))]
+    pub blast_radius: f64,
+    pub damage: f64,
+    #[cfg_attr(feature = "std", serde(rename = "armTicks"))]
+    pub arm_ticks: i64,
+}
+
 /// Mirror of the TS `WorldState`, holding only the fields `serialize_world`
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
@@ -142,6 +160,8 @@ pub struct WorldState {
     /// Lingering gas clouds (Gas Grenade); tick down + DoT each step.
     #[cfg_attr(feature = "std", serde(rename = "gasClouds"))]
     pub gas_clouds: Vec<GasCloud>,
+    /// Proximity mines (Llama Bomb); detonate when an ape nears.
+    pub mines: Vec<Mine>,
     /// Terrain occupancy mask (width/height + raw bytes). Carries its own
     /// dimensions so physics helpers and `alive()` can use them (the world's
     /// width/height are not otherwise stored). The `data` bytes are appended
@@ -235,6 +255,16 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.f(c.damage_per_tick);
     }
 
+    w.u32(world.mines.len() as i64);
+    for m in &world.mines {
+        w.f(m.x);
+        w.f(m.y);
+        w.f(m.trigger_radius);
+        w.f(m.blast_radius);
+        w.f(m.damage);
+        w.u32(m.arm_ticks);
+    }
+
     w.bytes(&world.mask.data);
     w.buf
 }
@@ -299,6 +329,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         ammo: vec![start_ammo.clone(), start_ammo],
         shot: None,
         gas_clouds: vec![],
+        mines: vec![],
         mask,
     }
 }
@@ -458,6 +489,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
     advance_shot(world);
     settle_apes(world, walk_dir);
     update_gas_clouds(world);
+    update_mines(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -710,11 +742,23 @@ fn advance_shot(world: &mut WorldState) {
 /// is still `Some` here (cleared by the caller after detonate returns), matching
 /// the TS weapon lookup for damage.
 fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
-    carve_circle(&mut world.mask, x, y, radius);
     let weapon = match &world.shot {
         Some(shot) => weapon_at(shot.weapon as usize),
         None => weapon_at(0),
     };
+    if weapon.id == "llamaBomb" {
+        // Plant an armed proximity mine; it detonates later, not on impact.
+        world.mines.push(Mine {
+            x,
+            y,
+            trigger_radius: MINE_TRIGGER_RADIUS,
+            blast_radius: weapon.blast_radius,
+            damage: weapon.damage,
+            arm_ticks: MINE_ARM_TICKS,
+        });
+        return;
+    }
+    carve_circle(&mut world.mask, x, y, radius);
     apply_blast(world, x, y, radius, weapon.damage);
     if weapon.id == "bridge" {
         teleport_active_ape(world, x, y);
@@ -754,6 +798,41 @@ fn update_gas_clouds(world: &mut WorldState) {
         world.gas_clouds[i].ticks_left -= 1;
         if world.gas_clouds[i].ticks_left <= 0 {
             world.gas_clouds.remove(i);
+        }
+    }
+}
+
+/// Arm mines and detonate any whose trigger radius an ape has entered.
+/// Ported from `updateMines` in `src/sim/World.ts`.
+fn update_mines(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    let mut i = world.mines.len();
+    while i > 0 {
+        i -= 1;
+        if world.mines[i].arm_ticks > 0 {
+            world.mines[i].arm_ticks -= 1;
+            continue;
+        }
+        let (mx, my, tr2, br, dmg) = {
+            let m = &world.mines[i];
+            (m.x, m.y, m.trigger_radius * m.trigger_radius, m.blast_radius, m.damage)
+        };
+        let mut triggered = false;
+        for ape in world.apes.iter() {
+            if !alive(ape, height) {
+                continue;
+            }
+            let dx = ape.x - mx;
+            let dy = ape.y - my;
+            if dx * dx + dy * dy <= tr2 {
+                triggered = true;
+                break;
+            }
+        }
+        if triggered {
+            carve_circle(&mut world.mask, mx, my, br);
+            apply_blast(world, mx, my, br, dmg);
+            world.mines.remove(i);
         }
     }
 }

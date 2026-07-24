@@ -124,6 +124,16 @@ export function serializeWorld(world: WorldState): Uint8Array {
     w.f(c.damagePerTick);
   }
 
+  w.u32(world.mines.length);
+  for (const m of world.mines) {
+    w.f(m.x);
+    w.f(m.y);
+    w.f(m.triggerRadius);
+    w.f(m.blastRadius);
+    w.f(m.damage);
+    w.u32(m.armTicks);
+  }
+
   w.bytes(world.mask.data);
   return w.finish();
 }
