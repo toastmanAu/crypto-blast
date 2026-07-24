@@ -45,6 +45,9 @@ const RESOLVE_MAX_TICKS: i64 = 400; // 8 s spiral guard for the settle wait
 const KNOCKBACK: f64 = 320.0; // px/s impulse at blast centre
 const FALL_DAMAGE_THRESHOLD: f64 = 600.0; // px/s landing speed before damage
 const FALL_DAMAGE_SCALE: f64 = 0.05; // health lost per px/s over the threshold
+const GAS_RADIUS: f64 = 50.0; // px radius of a Gas Grenade's lingering cloud
+const GAS_TICKS: i64 = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
+const GAS_DAMAGE_PER_TICK: f64 = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
 /// The simulation's one and only timestep, in seconds (mirrors `FIXED_DT` in
@@ -88,6 +91,20 @@ pub struct ShotState {
     pub weapon: i64,
 }
 
+/// A lingering gas cloud left by a Gas Grenade: damages every ape inside its
+/// radius each tick until its lifetime expires. Mirrors TS `GasCloud`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct GasCloud {
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    #[cfg_attr(feature = "std", serde(rename = "ticksLeft"))]
+    pub ticks_left: i64,
+    #[cfg_attr(feature = "std", serde(rename = "damagePerTick"))]
+    pub damage_per_tick: f64,
+}
+
 /// Mirror of the TS `WorldState`, holding only the fields `serialize_world`
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
@@ -122,6 +139,9 @@ pub struct WorldState {
     /// `0xFFFFFFFF`).
     pub ammo: Vec<Vec<i64>>,
     pub shot: Option<ShotState>,
+    /// Lingering gas clouds (Gas Grenade); tick down + DoT each step.
+    #[cfg_attr(feature = "std", serde(rename = "gasClouds"))]
+    pub gas_clouds: Vec<GasCloud>,
     /// Terrain occupancy mask (width/height + raw bytes). Carries its own
     /// dimensions so physics helpers and `alive()` can use them (the world's
     /// width/height are not otherwise stored). The `data` bytes are appended
@@ -206,6 +226,15 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.u32(shot.weapon);
     }
 
+    w.u32(world.gas_clouds.len() as i64);
+    for c in &world.gas_clouds {
+        w.f(c.x);
+        w.f(c.y);
+        w.f(c.radius);
+        w.u32(c.ticks_left);
+        w.f(c.damage_per_tick);
+    }
+
     w.bytes(&world.mask.data);
     w.buf
 }
@@ -269,6 +298,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         selected_weapon: 0,
         ammo: vec![start_ammo.clone(), start_ammo],
         shot: None,
+        gas_clouds: vec![],
         mask,
     }
 }
@@ -427,6 +457,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
 
     advance_shot(world);
     settle_apes(world, walk_dir);
+    update_gas_clouds(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -687,6 +718,43 @@ fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
     apply_blast(world, x, y, radius, weapon.damage);
     if weapon.id == "bridge" {
         teleport_active_ape(world, x, y);
+    }
+    if weapon.id == "gasGrenade" {
+        world.gas_clouds.push(GasCloud {
+            x,
+            y,
+            radius: GAS_RADIUS,
+            ticks_left: GAS_TICKS,
+            damage_per_tick: GAS_DAMAGE_PER_TICK,
+        });
+    }
+}
+
+/// Tick every gas cloud down: damage each ape inside, expire spent clouds.
+/// Ported from `updateGasClouds` in `src/sim/World.ts`.
+fn update_gas_clouds(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    let mut i = world.gas_clouds.len();
+    while i > 0 {
+        i -= 1;
+        let (cx, cy, r2, dpt) = {
+            let c = &world.gas_clouds[i];
+            (c.x, c.y, c.radius * c.radius, c.damage_per_tick)
+        };
+        for ape in world.apes.iter_mut() {
+            if !alive(ape, height) {
+                continue;
+            }
+            let dx = ape.x - cx;
+            let dy = ape.y - cy;
+            if dx * dx + dy * dy <= r2 {
+                ape.health -= dpt;
+            }
+        }
+        world.gas_clouds[i].ticks_left -= 1;
+        if world.gas_clouds[i].ticks_left <= 0 {
+            world.gas_clouds.remove(i);
+        }
     }
 }
 

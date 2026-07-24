@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
-  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST,
+  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS,
 } from '../src/sim/World';
 import type { TickInput } from '../src/sim/World';
 import { isSolid } from '../src/physics/DestructibleTerrain';
@@ -525,5 +525,57 @@ describe('weapons: bridge teleport', () => {
     const a = w.apes[firer];
     expect(Math.abs(a.x - (impactX as number))).toBeLessThan(2); // stood on the impact column
     expect(Math.abs(a.x - startX)).toBeGreaterThan(20);          // actually relocated
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: Gas Grenade DoT cloud
+// ---------------------------------------------------------------------------
+
+/** Fire the active ape's gasGrenade (index 1) full-power to the right and step
+ *  until a gas cloud exists. Returns the world once the cloud has formed. */
+function fireGasUntilCloud(w: ReturnType<typeof createWorld>): void {
+  w.selectedWeapon = 1; // gasGrenade
+  w.aim.facing = 1;
+  w.aim.elevation = Math.PI / 6;
+  w.aim.power = 1;
+  w.aim.isCharging = true;
+  stepWorld(w, mk({ fireReleased: true }));
+  for (let i = 0; i < 400 && w.gasClouds.length === 0; i++) stepWorld(w, idle);
+}
+
+describe('weapons: gas grenade DoT cloud', () => {
+  it('leaves a lingering cloud on detonation', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    expect(w.gasClouds.length).toBe(1);
+    expect(w.gasClouds[0].ticksLeft).toBeLessThanOrEqual(GAS_TICKS);
+  });
+
+  it('damages an ape standing inside the cloud each tick', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    const cloud = w.gasClouds[0];
+    const target = w.apes.find((a) => alive(a, w.height))!;
+    target.x = cloud.x; target.y = cloud.y; target.velX = 0; target.velY = 0;
+    const hpBefore = target.health;
+    stepWorld(w, idle);
+    expect(target.health).toBeLessThan(hpBefore); // took a tick of gas damage
+  });
+
+  it('expires after its lifetime', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    expect(w.gasClouds.length).toBe(1);
+    for (let i = 0; i < GAS_TICKS + 60; i++) stepWorld(w, idle);
+    expect(w.gasClouds.length).toBe(0); // cloud burnt out
+  });
+
+  it('gasClouds is part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.gasClouds.push({ x: 100, y: 100, radius: 50, ticksLeft: 10, damagePerTick: 0.25 });
+    expect(commitHex(a)).not.toBe(commitHex(b));
   });
 });

@@ -115,6 +115,15 @@ export function serializeWorld(world: WorldState): Uint8Array {
     w.u32(world.shot.weapon);
   }
 
+  w.u32(world.gasClouds.length);
+  for (const c of world.gasClouds) {
+    w.f(c.x);
+    w.f(c.y);
+    w.f(c.radius);
+    w.u32(c.ticksLeft);
+    w.f(c.damagePerTick);
+  }
+
   w.bytes(world.mask.data);
   return w.finish();
 }

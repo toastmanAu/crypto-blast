@@ -40,6 +40,9 @@ export const RESOLVE_MAX_TICKS = 400; // 8 s spiral guard for the settle wait
 export const KNOCKBACK = 320; // px/s impulse at blast centre
 export const FALL_DAMAGE_THRESHOLD = 600; // px/s landing speed before damage
 export const FALL_DAMAGE_SCALE = 0.05; // health lost per px/s over the threshold
+export const GAS_RADIUS = 50; // px radius of a Gas Grenade's lingering cloud
+export const GAS_TICKS = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
+export const GAS_DAMAGE_PER_TICK = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
 const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
 
@@ -64,6 +67,16 @@ export interface ShotState {
 
 export type SimEvent = { type: 'detonation'; x: number; y: number; radius: number };
 
+/** A lingering gas cloud left by a Gas Grenade: damages every ape inside its
+ *  radius each tick until its lifetime expires. Serialized (affects outcome). */
+export interface GasCloud {
+  x: number;
+  y: number;
+  radius: number;
+  ticksLeft: number;
+  damagePerTick: number;
+}
+
 export interface WorldState {
   width: number;
   height: number;
@@ -82,6 +95,7 @@ export interface WorldState {
   selectedWeapon: number; // sticky WEAPON_ORDER index, default 0
   ammo: number[][];       // ammo[team][weaponIndex]; -1 = unlimited
   shot: ShotState | null;
+  gasClouds: GasCloud[];  // lingering gas clouds (Gas Grenade); tick down + DoT each step
   mask: TerrainMask;
   events: SimEvent[];
 }
@@ -152,6 +166,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     selectedWeapon: 0,
     ammo: [startAmmo.slice(), startAmmo.slice()],
     shot: null,
+    gasClouds: [],
     mask,
     events: [],
   };
@@ -234,6 +249,7 @@ export function stepWorld(world: WorldState, input: TickInput): void {
 
   advanceShot(world);
   settleApes(world, walkDir);
+  updateGasClouds(world);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -413,6 +429,24 @@ function detonate(world: WorldState, x: number, y: number, radius: number): void
   const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
   if (weapon.id === 'bridge') teleportActiveApe(world, x, y);
+  if (weapon.id === 'gasGrenade') {
+    world.gasClouds.push({ x, y, radius: GAS_RADIUS, ticksLeft: GAS_TICKS, damagePerTick: GAS_DAMAGE_PER_TICK });
+  }
+}
+
+/** Tick every gas cloud down: damage each ape inside, expire spent clouds. */
+function updateGasClouds(world: WorldState): void {
+  for (let i = world.gasClouds.length - 1; i >= 0; i--) {
+    const cloud = world.gasClouds[i];
+    const r2 = cloud.radius * cloud.radius;
+    for (const ape of world.apes) {
+      if (!alive(ape, world.height)) continue;
+      const dx = ape.x - cloud.x;
+      const dy = ape.y - cloud.y;
+      if (dx * dx + dy * dy <= r2) ape.health -= cloud.damagePerTick;
+    }
+    if (--cloud.ticksLeft <= 0) world.gasClouds.splice(i, 1);
+  }
 }
 
 /** Bridge: relocate the firing ape to the impact column, standing on the surface
