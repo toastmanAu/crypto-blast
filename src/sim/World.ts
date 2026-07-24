@@ -40,6 +40,23 @@ export const RESOLVE_MAX_TICKS = 400; // 8 s spiral guard for the settle wait
 export const KNOCKBACK = 320; // px/s impulse at blast centre
 export const FALL_DAMAGE_THRESHOLD = 600; // px/s landing speed before damage
 export const FALL_DAMAGE_SCALE = 0.05; // health lost per px/s over the threshold
+export const GAS_RADIUS = 50; // px radius of a Gas Grenade's lingering cloud
+export const GAS_TICKS = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
+export const GAS_DAMAGE_PER_TICK = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
+export const MINE_TRIGGER_RADIUS = 30; // px proximity radius that sets a mine off
+export const MINE_ARM_TICKS = 25; // arming delay (0.5 s) so the planter isn't instant-blasted
+// Cluster shrapnel (Airdrop Cluster): impact-only fragments fanned upward.
+export const CLUSTER_COUNT = 6;
+export const CLUSTER_SPEED = 280;
+export const CLUSTER_RADIUS = 20;
+export const CLUSTER_DAMAGE = 14;
+// Seed sub-bombs (Watermelon Bomb): fuse-timed airbursts popped upward.
+export const SEED_COUNT = 4;
+export const SEED_SPEED = 240;
+export const SEED_RADIUS = 32;
+export const SEED_DAMAGE = 22;
+export const SEED_FUSE = 45; // ticks until a sub-bomb airbursts (0.9 s)
+const SUB_GRAVITY = 800; // px/s^2 on sub-munitions
 const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
 
@@ -64,6 +81,41 @@ export interface ShotState {
 
 export type SimEvent = { type: 'detonation'; x: number; y: number; radius: number };
 
+/** A lingering gas cloud left by a Gas Grenade: damages every ape inside its
+ *  radius each tick until its lifetime expires. Serialized (affects outcome). */
+export interface GasCloud {
+  x: number;
+  y: number;
+  radius: number;
+  ticksLeft: number;
+  damagePerTick: number;
+}
+
+/** A proximity mine planted by a Llama Bomb: arms after a short delay, then
+ *  detonates (blast) when any ape enters its trigger radius. Persists until
+ *  triggered. Serialized (affects outcome). */
+export interface Mine {
+  x: number;
+  y: number;
+  triggerRadius: number;
+  blastRadius: number;
+  damage: number;
+  armTicks: number; // ticks left until armed; >0 = still arming
+}
+
+/** A secondary projectile spawned by a cluster/seed weapon: flies under gravity
+ *  and detonates on impact, or on a fuse (airburst) if `fuse >= 0`. `fuse === -1`
+ *  means impact-only. Serialized (affects outcome). */
+export interface SubMunition {
+  x: number;
+  y: number;
+  velX: number;
+  velY: number;
+  blastRadius: number;
+  damage: number;
+  fuse: number; // ticks to airburst; -1 = impact-only
+}
+
 export interface WorldState {
   width: number;
   height: number;
@@ -82,6 +134,9 @@ export interface WorldState {
   selectedWeapon: number; // sticky WEAPON_ORDER index, default 0
   ammo: number[][];       // ammo[team][weaponIndex]; -1 = unlimited
   shot: ShotState | null;
+  gasClouds: GasCloud[];  // lingering gas clouds (Gas Grenade); tick down + DoT each step
+  mines: Mine[];          // proximity mines (Llama Bomb); detonate when an ape nears
+  subMunitions: SubMunition[]; // cluster shrapnel / seed sub-bombs in flight
   mask: TerrainMask;
   events: SimEvent[];
 }
@@ -152,6 +207,9 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     selectedWeapon: 0,
     ammo: [startAmmo.slice(), startAmmo.slice()],
     shot: null,
+    gasClouds: [],
+    mines: [],
+    subMunitions: [],
     mask,
     events: [],
   };
@@ -234,6 +292,9 @@ export function stepWorld(world: WorldState, input: TickInput): void {
 
   advanceShot(world);
   settleApes(world, walkDir);
+  updateGasClouds(world);
+  updateMines(world);
+  updateSubMunitions(world);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -408,10 +469,124 @@ function advanceShot(world: WorldState): void {
 }
 
 function detonate(world: WorldState, x: number, y: number, radius: number): void {
+  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
+  if (weapon.id === 'llamaBomb') {
+    // Plant an armed proximity mine; it detonates later, not on impact.
+    world.mines.push({ x, y, triggerRadius: MINE_TRIGGER_RADIUS, blastRadius: weapon.blastRadius, damage: weapon.damage, armTicks: MINE_ARM_TICKS });
+    return;
+  }
+  if (weapon.id === 'airdropCluster') {
+    spawnCluster(world, x, y); // splits into shrapnel; no parent blast
+    return;
+  }
   carveCircle(world.mask, x, y, radius);
   world.events.push({ type: 'detonation', x, y, radius });
-  const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
+  if (weapon.id === 'bridge') teleportActiveApe(world, x, y);
+  if (weapon.id === 'gasGrenade') {
+    world.gasClouds.push({ x, y, radius: GAS_RADIUS, ticksLeft: GAS_TICKS, damagePerTick: GAS_DAMAGE_PER_TICK });
+  }
+  if (weapon.id === 'watermelonBomb') spawnSeeds(world, x, y); // big blast + popped sub-bombs
+}
+
+/** Airdrop Cluster: fan `CLUSTER_COUNT` impact-only shrapnel across an upward arc. */
+function spawnCluster(world: WorldState, x: number, y: number): void {
+  const lo = Math.PI / 6;          // 30°
+  const span = (2 * Math.PI) / 3;  // 120°
+  for (let k = 0; k < CLUSTER_COUNT; k++) {
+    const angle = lo + (span * k) / (CLUSTER_COUNT - 1);
+    world.subMunitions.push({
+      x, y,
+      velX: dcos(angle) * CLUSTER_SPEED,
+      velY: -dsin(angle) * CLUSTER_SPEED,
+      blastRadius: CLUSTER_RADIUS, damage: CLUSTER_DAMAGE, fuse: -1,
+    });
+  }
+}
+
+/** Watermelon Bomb: pop `SEED_COUNT` fuse-timed sub-bombs across an upward arc. */
+function spawnSeeds(world: WorldState, x: number, y: number): void {
+  const lo = (5 * Math.PI) / 18;   // 50°
+  const span = (4 * Math.PI) / 9;  // 80°
+  for (let k = 0; k < SEED_COUNT; k++) {
+    const angle = lo + (span * k) / (SEED_COUNT - 1);
+    world.subMunitions.push({
+      x, y,
+      velX: dcos(angle) * SEED_SPEED,
+      velY: -dsin(angle) * SEED_SPEED,
+      blastRadius: SEED_RADIUS, damage: SEED_DAMAGE, fuse: SEED_FUSE,
+    });
+  }
+}
+
+/** Tick every gas cloud down: damage each ape inside, expire spent clouds. */
+function updateGasClouds(world: WorldState): void {
+  for (let i = world.gasClouds.length - 1; i >= 0; i--) {
+    const cloud = world.gasClouds[i];
+    const r2 = cloud.radius * cloud.radius;
+    for (const ape of world.apes) {
+      if (!alive(ape, world.height)) continue;
+      const dx = ape.x - cloud.x;
+      const dy = ape.y - cloud.y;
+      if (dx * dx + dy * dy <= r2) ape.health -= cloud.damagePerTick;
+    }
+    if (--cloud.ticksLeft <= 0) world.gasClouds.splice(i, 1);
+  }
+}
+
+/** Arm mines and detonate any whose trigger radius an ape has entered. */
+function updateMines(world: WorldState): void {
+  for (let i = world.mines.length - 1; i >= 0; i--) {
+    const mine = world.mines[i];
+    if (mine.armTicks > 0) { mine.armTicks--; continue; }
+    const tr2 = mine.triggerRadius * mine.triggerRadius;
+    let triggered = false;
+    for (const ape of world.apes) {
+      if (!alive(ape, world.height)) continue;
+      const dx = ape.x - mine.x;
+      const dy = ape.y - mine.y;
+      if (dx * dx + dy * dy <= tr2) { triggered = true; break; }
+    }
+    if (triggered) {
+      carveCircle(world.mask, mine.x, mine.y, mine.blastRadius);
+      world.events.push({ type: 'detonation', x: mine.x, y: mine.y, radius: mine.blastRadius });
+      applyBlast(world, mine.x, mine.y, mine.blastRadius, mine.damage);
+      world.mines.splice(i, 1);
+    }
+  }
+}
+
+/** Advance sub-munitions: gravity, motion, then detonate on impact or fuse. */
+function updateSubMunitions(world: WorldState): void {
+  for (let i = world.subMunitions.length - 1; i >= 0; i--) {
+    const s = world.subMunitions[i];
+    s.velY += SUB_GRAVITY * FIXED_DT;
+    s.x += s.velX * FIXED_DT;
+    s.y += s.velY * FIXED_DT;
+    if (s.fuse > 0) s.fuse--;
+    if (s.x < -50 || s.x > world.width + 50 || s.y > world.height + 50) {
+      world.subMunitions.splice(i, 1); // flew offscreen: gone, no blast
+      continue;
+    }
+    if (isSolid(world.mask, s.x, s.y) || s.fuse === 0) {
+      carveCircle(world.mask, s.x, s.y, s.blastRadius);
+      world.events.push({ type: 'detonation', x: s.x, y: s.y, radius: s.blastRadius });
+      applyBlast(world, s.x, s.y, s.blastRadius, s.damage);
+      world.subMunitions.splice(i, 1);
+    }
+  }
+}
+
+/** Bridge: relocate the firing ape to the impact column, standing on the surface
+ *  (or dropped from the impact height if the column was carved away). */
+function teleportActiveApe(world: WorldState, x: number, y: number): void {
+  const ape = world.apes[world.activeApe];
+  if (!alive(ape, world.height)) return;
+  const surf = columnSurface(world.mask, x);
+  ape.x = x;
+  ape.y = surf !== null ? surf - APE_HEIGHT / 2 - 1 : y - APE_HEIGHT / 2;
+  ape.velX = 0;
+  ape.velY = 0;
 }
 
 /** Radial falloff damage + knockback to every living ape within `radius`. */

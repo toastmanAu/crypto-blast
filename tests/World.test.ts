@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
-  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST,
+  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS, MINE_ARM_TICKS, CLUSTER_COUNT,
 } from '../src/sim/World';
 import type { TickInput } from '../src/sim/World';
 import { isSolid } from '../src/physics/DestructibleTerrain';
@@ -496,6 +496,200 @@ describe('locomotion: movement budget', () => {
     const b = createWorld(7, W, H);
     expect(commitHex(a)).toBe(commitHex(b));
     a.moveBudget -= 50;
+    expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: Bridge teleport
+// ---------------------------------------------------------------------------
+
+describe('weapons: bridge teleport', () => {
+  it('relocates the firing ape to the impact column', () => {
+    const w = createWorld(1234, W, H);
+    const firer = w.activeApe;
+    w.selectedWeapon = 5; // bridge
+    w.aim.facing = 1;
+    w.aim.elevation = Math.PI / 6; // 30° — elevation is in radians (0=horizon, PI/2=up)
+    w.aim.power = 1;
+    w.aim.isCharging = true;
+    const startX = w.apes[firer].x;
+    stepWorld(w, mk({ fireReleased: true })); // launch the bridge at full power
+    let impactX: number | null = null;
+    for (let i = 0; i < 400 && w.phase !== 'AIMING'; i++) {
+      stepWorld(w, idle);
+      const ev = w.events.find((e) => e.type === 'detonation');
+      if (ev) impactX = ev.x;
+    }
+    expect(impactX).not.toBeNull();                      // detonated in-bounds
+    const a = w.apes[firer];
+    expect(Math.abs(a.x - (impactX as number))).toBeLessThan(2); // stood on the impact column
+    expect(Math.abs(a.x - startX)).toBeGreaterThan(20);          // actually relocated
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: Gas Grenade DoT cloud
+// ---------------------------------------------------------------------------
+
+/** Fire the active ape's gasGrenade (index 1) full-power to the right and step
+ *  until a gas cloud exists. Returns the world once the cloud has formed. */
+function fireGasUntilCloud(w: ReturnType<typeof createWorld>): void {
+  w.selectedWeapon = 1; // gasGrenade
+  w.aim.facing = 1;
+  w.aim.elevation = Math.PI / 6;
+  w.aim.power = 1;
+  w.aim.isCharging = true;
+  stepWorld(w, mk({ fireReleased: true }));
+  for (let i = 0; i < 400 && w.gasClouds.length === 0; i++) stepWorld(w, idle);
+}
+
+describe('weapons: gas grenade DoT cloud', () => {
+  it('leaves a lingering cloud on detonation', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    expect(w.gasClouds.length).toBe(1);
+    expect(w.gasClouds[0].ticksLeft).toBeLessThanOrEqual(GAS_TICKS);
+  });
+
+  it('damages an ape standing inside the cloud each tick', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    const cloud = w.gasClouds[0];
+    const target = w.apes.find((a) => alive(a, w.height))!;
+    target.x = cloud.x; target.y = cloud.y; target.velX = 0; target.velY = 0;
+    const hpBefore = target.health;
+    stepWorld(w, idle);
+    expect(target.health).toBeLessThan(hpBefore); // took a tick of gas damage
+  });
+
+  it('expires after its lifetime', () => {
+    const w = createWorld(1234, W, H);
+    fireGasUntilCloud(w);
+    expect(w.gasClouds.length).toBe(1);
+    for (let i = 0; i < GAS_TICKS + 60; i++) stepWorld(w, idle);
+    expect(w.gasClouds.length).toBe(0); // cloud burnt out
+  });
+
+  it('gasClouds is part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.gasClouds.push({ x: 100, y: 100, radius: 50, ticksLeft: 10, damagePerTick: 0.25 });
+    expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: Llama Bomb proximity mine
+// ---------------------------------------------------------------------------
+
+/** Fire the active ape's llamaBomb (index 4) full-power to the right and step
+ *  until a mine has been planted. */
+function fireMineUntilPlanted(w: ReturnType<typeof createWorld>): void {
+  w.selectedWeapon = 4; // llamaBomb
+  w.aim.facing = 1;
+  w.aim.elevation = Math.PI / 6;
+  w.aim.power = 1;
+  w.aim.isCharging = true;
+  stepWorld(w, mk({ fireReleased: true }));
+  for (let i = 0; i < 400 && w.mines.length === 0; i++) stepWorld(w, idle);
+}
+
+describe('weapons: llama bomb proximity mine', () => {
+  it('plants an armed mine instead of blasting on impact', () => {
+    const w = createWorld(1234, W, H);
+    fireMineUntilPlanted(w);
+    expect(w.mines.length).toBe(1);
+    const mine = w.mines[0];
+    expect(mine.blastRadius).toBeGreaterThan(0);
+    expect(mine.armTicks).toBeLessThanOrEqual(MINE_ARM_TICKS);
+  });
+
+  it('does not detonate before it is armed', () => {
+    const w = createWorld(1234, W, H);
+    fireMineUntilPlanted(w);
+    const mine = w.mines[0];
+    expect(mine.armTicks).toBeGreaterThan(0); // freshly planted, still arming
+    const target = w.apes.find((a) => alive(a, w.height))!;
+    target.x = mine.x; target.y = mine.y; target.velX = 0; target.velY = 0;
+    stepWorld(w, idle);
+    expect(w.mines.length).toBe(1); // arming — not detonated yet
+  });
+
+  it('detonates when an ape enters its trigger radius once armed', () => {
+    const w = createWorld(1234, W, H);
+    // Plant a mine high-centre, far from every grounded ape, so it arms undisturbed.
+    const mx = 640, my = 100;
+    w.mines.push({ x: mx, y: my, triggerRadius: 30, blastRadius: 48, damage: 40, armTicks: MINE_ARM_TICKS });
+    for (let i = 0; i < MINE_ARM_TICKS + 5; i++) stepWorld(w, idle); // let it arm
+    expect(w.mines.length).toBe(1); // armed, no ape near → still planted
+    const target = w.apes.find((a) => alive(a, w.height))!;
+    target.x = mx; target.y = my; target.velX = 0; target.velY = 0;
+    const hpBefore = target.health;
+    stepWorld(w, idle);
+    expect(w.mines.length).toBe(0);          // blew up
+    expect(target.health).toBeLessThan(hpBefore); // blast damage
+  });
+
+  it('mines is part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.mines.push({ x: 100, y: 100, triggerRadius: 30, blastRadius: 48, damage: 40, armTicks: 25 });
+    expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: cluster shrapnel + seed sub-bombs (shared sub-munition system)
+// ---------------------------------------------------------------------------
+
+/** Fire the active ape's weapon `index` full-power to the right. */
+function fireWeapon(w: ReturnType<typeof createWorld>, index: number): void {
+  w.selectedWeapon = index;
+  w.aim.facing = 1;
+  w.aim.elevation = Math.PI / 6;
+  w.aim.power = 1;
+  w.aim.isCharging = true;
+  stepWorld(w, mk({ fireReleased: true }));
+}
+
+describe('weapons: cluster + seed sub-munitions', () => {
+  it('airdropCluster splits into impact-only shrapnel that scatter and clear', () => {
+    const w = createWorld(1234, W, H);
+    fireWeapon(w, 2); // airdropCluster
+    let peak = 0;
+    for (let i = 0; i < 300; i++) {
+      stepWorld(w, idle);
+      peak = Math.max(peak, w.subMunitions.length);
+      for (const s of w.subMunitions) expect(s.fuse).toBe(-1); // impact-only
+    }
+    expect(peak).toBeGreaterThan(0);              // shrapnel spawned
+    expect(peak).toBeLessThanOrEqual(CLUSTER_COUNT);
+    expect(w.subMunitions.length).toBe(0);        // all detonated
+  });
+
+  it('watermelonBomb pops fuse-timed sub-bombs (not impact-only)', () => {
+    const w = createWorld(1234, W, H);
+    fireWeapon(w, 3); // watermelonBomb
+    let sawSeeds = false;
+    for (let i = 0; i < 300; i++) {
+      stepWorld(w, idle);
+      if (w.subMunitions.length > 0) {
+        sawSeeds = true;
+        for (const s of w.subMunitions) expect(s.fuse).toBeGreaterThanOrEqual(0); // fuse-timed
+      }
+    }
+    expect(sawSeeds).toBe(true);
+    expect(w.subMunitions.length).toBe(0); // all airburst / impacted
+  });
+
+  it('subMunitions is part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.subMunitions.push({ x: 100, y: 100, velX: 10, velY: -10, blastRadius: 20, damage: 14, fuse: -1 });
     expect(commitHex(a)).not.toBe(commitHex(b));
   });
 });

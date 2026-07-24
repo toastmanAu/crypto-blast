@@ -115,6 +115,36 @@ export function serializeWorld(world: WorldState): Uint8Array {
     w.u32(world.shot.weapon);
   }
 
+  w.u32(world.gasClouds.length);
+  for (const c of world.gasClouds) {
+    w.f(c.x);
+    w.f(c.y);
+    w.f(c.radius);
+    w.u32(c.ticksLeft);
+    w.f(c.damagePerTick);
+  }
+
+  w.u32(world.mines.length);
+  for (const m of world.mines) {
+    w.f(m.x);
+    w.f(m.y);
+    w.f(m.triggerRadius);
+    w.f(m.blastRadius);
+    w.f(m.damage);
+    w.u32(m.armTicks);
+  }
+
+  w.u32(world.subMunitions.length);
+  for (const s of world.subMunitions) {
+    w.f(s.x);
+    w.f(s.y);
+    w.f(s.velX);
+    w.f(s.velY);
+    w.f(s.blastRadius);
+    w.f(s.damage);
+    w.u32(s.fuse);
+  }
+
   w.bytes(world.mask.data);
   return w.finish();
 }

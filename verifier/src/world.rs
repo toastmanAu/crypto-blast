@@ -45,6 +45,23 @@ const RESOLVE_MAX_TICKS: i64 = 400; // 8 s spiral guard for the settle wait
 const KNOCKBACK: f64 = 320.0; // px/s impulse at blast centre
 const FALL_DAMAGE_THRESHOLD: f64 = 600.0; // px/s landing speed before damage
 const FALL_DAMAGE_SCALE: f64 = 0.05; // health lost per px/s over the threshold
+const GAS_RADIUS: f64 = 50.0; // px radius of a Gas Grenade's lingering cloud
+const GAS_TICKS: i64 = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
+const GAS_DAMAGE_PER_TICK: f64 = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
+const MINE_TRIGGER_RADIUS: f64 = 30.0; // px proximity radius that sets a mine off
+const MINE_ARM_TICKS: i64 = 25; // arming delay (0.5 s) so the planter isn't instant-blasted
+// Cluster shrapnel (Airdrop Cluster): impact-only fragments fanned upward.
+const CLUSTER_COUNT: usize = 6;
+const CLUSTER_SPEED: f64 = 280.0;
+const CLUSTER_RADIUS: f64 = 20.0;
+const CLUSTER_DAMAGE: f64 = 14.0;
+// Seed sub-bombs (Watermelon Bomb): fuse-timed airbursts popped upward.
+const SEED_COUNT: usize = 4;
+const SEED_SPEED: f64 = 240.0;
+const SEED_RADIUS: f64 = 32.0;
+const SEED_DAMAGE: f64 = 22.0;
+const SEED_FUSE: i64 = 45; // ticks until a sub-bomb airbursts (0.9 s)
+const SUB_GRAVITY: f64 = 800.0; // px/s^2 on sub-munitions
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
 /// The simulation's one and only timestep, in seconds (mirrors `FIXED_DT` in
@@ -88,6 +105,54 @@ pub struct ShotState {
     pub weapon: i64,
 }
 
+/// A lingering gas cloud left by a Gas Grenade: damages every ape inside its
+/// radius each tick until its lifetime expires. Mirrors TS `GasCloud`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct GasCloud {
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    #[cfg_attr(feature = "std", serde(rename = "ticksLeft"))]
+    pub ticks_left: i64,
+    #[cfg_attr(feature = "std", serde(rename = "damagePerTick"))]
+    pub damage_per_tick: f64,
+}
+
+/// A proximity mine planted by a Llama Bomb: arms after a short delay, then
+/// detonates when any ape enters its trigger radius. Mirrors TS `Mine`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct Mine {
+    pub x: f64,
+    pub y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "triggerRadius"))]
+    pub trigger_radius: f64,
+    #[cfg_attr(feature = "std", serde(rename = "blastRadius"))]
+    pub blast_radius: f64,
+    pub damage: f64,
+    #[cfg_attr(feature = "std", serde(rename = "armTicks"))]
+    pub arm_ticks: i64,
+}
+
+/// A secondary projectile spawned by a cluster/seed weapon: flies under gravity
+/// and detonates on impact, or on a fuse (airburst). `fuse == -1` = impact-only.
+/// Mirrors TS `SubMunition`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct SubMunition {
+    pub x: f64,
+    pub y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "velX"))]
+    pub vel_x: f64,
+    #[cfg_attr(feature = "std", serde(rename = "velY"))]
+    pub vel_y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "blastRadius"))]
+    pub blast_radius: f64,
+    pub damage: f64,
+    pub fuse: i64,
+}
+
 /// Mirror of the TS `WorldState`, holding only the fields `serialize_world`
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
@@ -122,6 +187,14 @@ pub struct WorldState {
     /// `0xFFFFFFFF`).
     pub ammo: Vec<Vec<i64>>,
     pub shot: Option<ShotState>,
+    /// Lingering gas clouds (Gas Grenade); tick down + DoT each step.
+    #[cfg_attr(feature = "std", serde(rename = "gasClouds"))]
+    pub gas_clouds: Vec<GasCloud>,
+    /// Proximity mines (Llama Bomb); detonate when an ape nears.
+    pub mines: Vec<Mine>,
+    /// Cluster shrapnel / seed sub-bombs in flight.
+    #[cfg_attr(feature = "std", serde(rename = "subMunitions"))]
+    pub sub_munitions: Vec<SubMunition>,
     /// Terrain occupancy mask (width/height + raw bytes). Carries its own
     /// dimensions so physics helpers and `alive()` can use them (the world's
     /// width/height are not otherwise stored). The `data` bytes are appended
@@ -206,6 +279,36 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.u32(shot.weapon);
     }
 
+    w.u32(world.gas_clouds.len() as i64);
+    for c in &world.gas_clouds {
+        w.f(c.x);
+        w.f(c.y);
+        w.f(c.radius);
+        w.u32(c.ticks_left);
+        w.f(c.damage_per_tick);
+    }
+
+    w.u32(world.mines.len() as i64);
+    for m in &world.mines {
+        w.f(m.x);
+        w.f(m.y);
+        w.f(m.trigger_radius);
+        w.f(m.blast_radius);
+        w.f(m.damage);
+        w.u32(m.arm_ticks);
+    }
+
+    w.u32(world.sub_munitions.len() as i64);
+    for s in &world.sub_munitions {
+        w.f(s.x);
+        w.f(s.y);
+        w.f(s.vel_x);
+        w.f(s.vel_y);
+        w.f(s.blast_radius);
+        w.f(s.damage);
+        w.u32(s.fuse);
+    }
+
     w.bytes(&world.mask.data);
     w.buf
 }
@@ -269,6 +372,9 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         selected_weapon: 0,
         ammo: vec![start_ammo.clone(), start_ammo],
         shot: None,
+        gas_clouds: vec![],
+        mines: vec![],
+        sub_munitions: vec![],
         mask,
     }
 }
@@ -427,6 +533,9 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
 
     advance_shot(world);
     settle_apes(world, walk_dir);
+    update_gas_clouds(world);
+    update_mines(world);
+    update_sub_munitions(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -679,12 +788,195 @@ fn advance_shot(world: &mut WorldState) {
 /// is still `Some` here (cleared by the caller after detonate returns), matching
 /// the TS weapon lookup for damage.
 fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
-    carve_circle(&mut world.mask, x, y, radius);
-    let damage = match &world.shot {
-        Some(shot) => weapon_at(shot.weapon as usize).damage,
-        None => weapon_at(0).damage,
+    let weapon = match &world.shot {
+        Some(shot) => weapon_at(shot.weapon as usize),
+        None => weapon_at(0),
     };
-    apply_blast(world, x, y, radius, damage);
+    if weapon.id == "llamaBomb" {
+        // Plant an armed proximity mine; it detonates later, not on impact.
+        world.mines.push(Mine {
+            x,
+            y,
+            trigger_radius: MINE_TRIGGER_RADIUS,
+            blast_radius: weapon.blast_radius,
+            damage: weapon.damage,
+            arm_ticks: MINE_ARM_TICKS,
+        });
+        return;
+    }
+    if weapon.id == "airdropCluster" {
+        spawn_cluster(world, x, y); // splits into shrapnel; no parent blast
+        return;
+    }
+    carve_circle(&mut world.mask, x, y, radius);
+    apply_blast(world, x, y, radius, weapon.damage);
+    if weapon.id == "bridge" {
+        teleport_active_ape(world, x, y);
+    }
+    if weapon.id == "gasGrenade" {
+        world.gas_clouds.push(GasCloud {
+            x,
+            y,
+            radius: GAS_RADIUS,
+            ticks_left: GAS_TICKS,
+            damage_per_tick: GAS_DAMAGE_PER_TICK,
+        });
+    }
+    if weapon.id == "watermelonBomb" {
+        spawn_seeds(world, x, y); // big blast + popped sub-bombs
+    }
+}
+
+/// Airdrop Cluster: fan `CLUSTER_COUNT` impact-only shrapnel across an upward arc.
+fn spawn_cluster(world: &mut WorldState, x: f64, y: f64) {
+    let lo = core::f64::consts::PI / 6.0; // 30°
+    let span = (2.0 * core::f64::consts::PI) / 3.0; // 120°
+    for k in 0..CLUSTER_COUNT {
+        let angle = lo + (span * k as f64) / (CLUSTER_COUNT - 1) as f64;
+        world.sub_munitions.push(SubMunition {
+            x,
+            y,
+            vel_x: dcos(angle) * CLUSTER_SPEED,
+            vel_y: -dsin(angle) * CLUSTER_SPEED,
+            blast_radius: CLUSTER_RADIUS,
+            damage: CLUSTER_DAMAGE,
+            fuse: -1,
+        });
+    }
+}
+
+/// Watermelon Bomb: pop `SEED_COUNT` fuse-timed sub-bombs across an upward arc.
+fn spawn_seeds(world: &mut WorldState, x: f64, y: f64) {
+    let lo = (5.0 * core::f64::consts::PI) / 18.0; // 50°
+    let span = (4.0 * core::f64::consts::PI) / 9.0; // 80°
+    for k in 0..SEED_COUNT {
+        let angle = lo + (span * k as f64) / (SEED_COUNT - 1) as f64;
+        world.sub_munitions.push(SubMunition {
+            x,
+            y,
+            vel_x: dcos(angle) * SEED_SPEED,
+            vel_y: -dsin(angle) * SEED_SPEED,
+            blast_radius: SEED_RADIUS,
+            damage: SEED_DAMAGE,
+            fuse: SEED_FUSE,
+        });
+    }
+}
+
+/// Tick every gas cloud down: damage each ape inside, expire spent clouds.
+/// Ported from `updateGasClouds` in `src/sim/World.ts`.
+fn update_gas_clouds(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    let mut i = world.gas_clouds.len();
+    while i > 0 {
+        i -= 1;
+        let (cx, cy, r2, dpt) = {
+            let c = &world.gas_clouds[i];
+            (c.x, c.y, c.radius * c.radius, c.damage_per_tick)
+        };
+        for ape in world.apes.iter_mut() {
+            if !alive(ape, height) {
+                continue;
+            }
+            let dx = ape.x - cx;
+            let dy = ape.y - cy;
+            if dx * dx + dy * dy <= r2 {
+                ape.health -= dpt;
+            }
+        }
+        world.gas_clouds[i].ticks_left -= 1;
+        if world.gas_clouds[i].ticks_left <= 0 {
+            world.gas_clouds.remove(i);
+        }
+    }
+}
+
+/// Arm mines and detonate any whose trigger radius an ape has entered.
+/// Ported from `updateMines` in `src/sim/World.ts`.
+fn update_mines(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    let mut i = world.mines.len();
+    while i > 0 {
+        i -= 1;
+        if world.mines[i].arm_ticks > 0 {
+            world.mines[i].arm_ticks -= 1;
+            continue;
+        }
+        let (mx, my, tr2, br, dmg) = {
+            let m = &world.mines[i];
+            (m.x, m.y, m.trigger_radius * m.trigger_radius, m.blast_radius, m.damage)
+        };
+        let mut triggered = false;
+        for ape in world.apes.iter() {
+            if !alive(ape, height) {
+                continue;
+            }
+            let dx = ape.x - mx;
+            let dy = ape.y - my;
+            if dx * dx + dy * dy <= tr2 {
+                triggered = true;
+                break;
+            }
+        }
+        if triggered {
+            carve_circle(&mut world.mask, mx, my, br);
+            apply_blast(world, mx, my, br, dmg);
+            world.mines.remove(i);
+        }
+    }
+}
+
+/// Advance sub-munitions: gravity, motion, then detonate on impact or fuse.
+/// Ported from `updateSubMunitions` in `src/sim/World.ts`.
+fn update_sub_munitions(world: &mut WorldState) {
+    let width = world.mask.width as f64;
+    let height = world.mask.height as f64;
+    let mut i = world.sub_munitions.len();
+    while i > 0 {
+        i -= 1;
+        {
+            let s = &mut world.sub_munitions[i];
+            s.vel_y += SUB_GRAVITY * FIXED_DT;
+            s.x += s.vel_x * FIXED_DT;
+            s.y += s.vel_y * FIXED_DT;
+            if s.fuse > 0 {
+                s.fuse -= 1;
+            }
+        }
+        let (sx, sy, fuse, br, dmg) = {
+            let s = &world.sub_munitions[i];
+            (s.x, s.y, s.fuse, s.blast_radius, s.damage)
+        };
+        if sx < -50.0 || sx > width + 50.0 || sy > height + 50.0 {
+            world.sub_munitions.remove(i); // flew offscreen: gone, no blast
+            continue;
+        }
+        if is_solid(&world.mask, sx, sy) || fuse == 0 {
+            carve_circle(&mut world.mask, sx, sy, br);
+            apply_blast(world, sx, sy, br, dmg);
+            world.sub_munitions.remove(i);
+        }
+    }
+}
+
+/// Bridge: relocate the firing ape to the impact column, standing on the surface
+/// (or dropped from the impact height if the column was carved away).
+/// Ported from `teleportActiveApe` in `src/sim/World.ts`.
+fn teleport_active_ape(world: &mut WorldState, x: f64, y: f64) {
+    let height = world.mask.height as f64;
+    let active = world.active_ape as usize;
+    if !alive(&world.apes[active], height) {
+        return;
+    }
+    let new_y = match column_surface(&world.mask, x) {
+        Some(s) => s as f64 - APE_HEIGHT / 2.0 - 1.0,
+        None => y - APE_HEIGHT / 2.0,
+    };
+    let ape = &mut world.apes[active];
+    ape.x = x;
+    ape.y = new_y;
+    ape.vel_x = 0.0;
+    ape.vel_y = 0.0;
 }
 
 /// Radial falloff damage + knockback to every living ape within `radius`.
