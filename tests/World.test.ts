@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
-  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS, MINE_ARM_TICKS,
+  APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS, MINE_ARM_TICKS, CLUSTER_COUNT,
 } from '../src/sim/World';
 import type { TickInput } from '../src/sim/World';
 import { isSolid } from '../src/physics/DestructibleTerrain';
@@ -637,6 +637,59 @@ describe('weapons: llama bomb proximity mine', () => {
     const b = createWorld(7, W, H);
     expect(commitHex(a)).toBe(commitHex(b));
     a.mines.push({ x: 100, y: 100, triggerRadius: 30, blastRadius: 48, damage: 40, armTicks: 25 });
+    expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Weapons: cluster shrapnel + seed sub-bombs (shared sub-munition system)
+// ---------------------------------------------------------------------------
+
+/** Fire the active ape's weapon `index` full-power to the right. */
+function fireWeapon(w: ReturnType<typeof createWorld>, index: number): void {
+  w.selectedWeapon = index;
+  w.aim.facing = 1;
+  w.aim.elevation = Math.PI / 6;
+  w.aim.power = 1;
+  w.aim.isCharging = true;
+  stepWorld(w, mk({ fireReleased: true }));
+}
+
+describe('weapons: cluster + seed sub-munitions', () => {
+  it('airdropCluster splits into impact-only shrapnel that scatter and clear', () => {
+    const w = createWorld(1234, W, H);
+    fireWeapon(w, 2); // airdropCluster
+    let peak = 0;
+    for (let i = 0; i < 300; i++) {
+      stepWorld(w, idle);
+      peak = Math.max(peak, w.subMunitions.length);
+      for (const s of w.subMunitions) expect(s.fuse).toBe(-1); // impact-only
+    }
+    expect(peak).toBeGreaterThan(0);              // shrapnel spawned
+    expect(peak).toBeLessThanOrEqual(CLUSTER_COUNT);
+    expect(w.subMunitions.length).toBe(0);        // all detonated
+  });
+
+  it('watermelonBomb pops fuse-timed sub-bombs (not impact-only)', () => {
+    const w = createWorld(1234, W, H);
+    fireWeapon(w, 3); // watermelonBomb
+    let sawSeeds = false;
+    for (let i = 0; i < 300; i++) {
+      stepWorld(w, idle);
+      if (w.subMunitions.length > 0) {
+        sawSeeds = true;
+        for (const s of w.subMunitions) expect(s.fuse).toBeGreaterThanOrEqual(0); // fuse-timed
+      }
+    }
+    expect(sawSeeds).toBe(true);
+    expect(w.subMunitions.length).toBe(0); // all airburst / impacted
+  });
+
+  it('subMunitions is part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.subMunitions.push({ x: 100, y: 100, velX: 10, velY: -10, blastRadius: 20, damage: 14, fuse: -1 });
     expect(commitHex(a)).not.toBe(commitHex(b));
   });
 });

@@ -50,6 +50,18 @@ const GAS_TICKS: i64 = 120; // lifetime of a gas cloud (2.4 s at 50 Hz)
 const GAS_DAMAGE_PER_TICK: f64 = 0.25; // DoT to each ape inside the cloud (= 12.5/s)
 const MINE_TRIGGER_RADIUS: f64 = 30.0; // px proximity radius that sets a mine off
 const MINE_ARM_TICKS: i64 = 25; // arming delay (0.5 s) so the planter isn't instant-blasted
+// Cluster shrapnel (Airdrop Cluster): impact-only fragments fanned upward.
+const CLUSTER_COUNT: usize = 6;
+const CLUSTER_SPEED: f64 = 280.0;
+const CLUSTER_RADIUS: f64 = 20.0;
+const CLUSTER_DAMAGE: f64 = 14.0;
+// Seed sub-bombs (Watermelon Bomb): fuse-timed airbursts popped upward.
+const SEED_COUNT: usize = 4;
+const SEED_SPEED: f64 = 240.0;
+const SEED_RADIUS: f64 = 32.0;
+const SEED_DAMAGE: f64 = 22.0;
+const SEED_FUSE: i64 = 45; // ticks until a sub-bomb airbursts (0.9 s)
+const SUB_GRAVITY: f64 = 800.0; // px/s^2 on sub-munitions
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
 /// The simulation's one and only timestep, in seconds (mirrors `FIXED_DT` in
@@ -123,6 +135,24 @@ pub struct Mine {
     pub arm_ticks: i64,
 }
 
+/// A secondary projectile spawned by a cluster/seed weapon: flies under gravity
+/// and detonates on impact, or on a fuse (airburst). `fuse == -1` = impact-only.
+/// Mirrors TS `SubMunition`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct SubMunition {
+    pub x: f64,
+    pub y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "velX"))]
+    pub vel_x: f64,
+    #[cfg_attr(feature = "std", serde(rename = "velY"))]
+    pub vel_y: f64,
+    #[cfg_attr(feature = "std", serde(rename = "blastRadius"))]
+    pub blast_radius: f64,
+    pub damage: f64,
+    pub fuse: i64,
+}
+
 /// Mirror of the TS `WorldState`, holding only the fields `serialize_world`
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
@@ -162,6 +192,9 @@ pub struct WorldState {
     pub gas_clouds: Vec<GasCloud>,
     /// Proximity mines (Llama Bomb); detonate when an ape nears.
     pub mines: Vec<Mine>,
+    /// Cluster shrapnel / seed sub-bombs in flight.
+    #[cfg_attr(feature = "std", serde(rename = "subMunitions"))]
+    pub sub_munitions: Vec<SubMunition>,
     /// Terrain occupancy mask (width/height + raw bytes). Carries its own
     /// dimensions so physics helpers and `alive()` can use them (the world's
     /// width/height are not otherwise stored). The `data` bytes are appended
@@ -265,6 +298,17 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.u32(m.arm_ticks);
     }
 
+    w.u32(world.sub_munitions.len() as i64);
+    for s in &world.sub_munitions {
+        w.f(s.x);
+        w.f(s.y);
+        w.f(s.vel_x);
+        w.f(s.vel_y);
+        w.f(s.blast_radius);
+        w.f(s.damage);
+        w.u32(s.fuse);
+    }
+
     w.bytes(&world.mask.data);
     w.buf
 }
@@ -330,6 +374,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         shot: None,
         gas_clouds: vec![],
         mines: vec![],
+        sub_munitions: vec![],
         mask,
     }
 }
@@ -490,6 +535,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
     settle_apes(world, walk_dir);
     update_gas_clouds(world);
     update_mines(world);
+    update_sub_munitions(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -758,6 +804,10 @@ fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
         });
         return;
     }
+    if weapon.id == "airdropCluster" {
+        spawn_cluster(world, x, y); // splits into shrapnel; no parent blast
+        return;
+    }
     carve_circle(&mut world.mask, x, y, radius);
     apply_blast(world, x, y, radius, weapon.damage);
     if weapon.id == "bridge" {
@@ -770,6 +820,45 @@ fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
             radius: GAS_RADIUS,
             ticks_left: GAS_TICKS,
             damage_per_tick: GAS_DAMAGE_PER_TICK,
+        });
+    }
+    if weapon.id == "watermelonBomb" {
+        spawn_seeds(world, x, y); // big blast + popped sub-bombs
+    }
+}
+
+/// Airdrop Cluster: fan `CLUSTER_COUNT` impact-only shrapnel across an upward arc.
+fn spawn_cluster(world: &mut WorldState, x: f64, y: f64) {
+    let lo = core::f64::consts::PI / 6.0; // 30°
+    let span = (2.0 * core::f64::consts::PI) / 3.0; // 120°
+    for k in 0..CLUSTER_COUNT {
+        let angle = lo + (span * k as f64) / (CLUSTER_COUNT - 1) as f64;
+        world.sub_munitions.push(SubMunition {
+            x,
+            y,
+            vel_x: dcos(angle) * CLUSTER_SPEED,
+            vel_y: -dsin(angle) * CLUSTER_SPEED,
+            blast_radius: CLUSTER_RADIUS,
+            damage: CLUSTER_DAMAGE,
+            fuse: -1,
+        });
+    }
+}
+
+/// Watermelon Bomb: pop `SEED_COUNT` fuse-timed sub-bombs across an upward arc.
+fn spawn_seeds(world: &mut WorldState, x: f64, y: f64) {
+    let lo = (5.0 * core::f64::consts::PI) / 18.0; // 50°
+    let span = (4.0 * core::f64::consts::PI) / 9.0; // 80°
+    for k in 0..SEED_COUNT {
+        let angle = lo + (span * k as f64) / (SEED_COUNT - 1) as f64;
+        world.sub_munitions.push(SubMunition {
+            x,
+            y,
+            vel_x: dcos(angle) * SEED_SPEED,
+            vel_y: -dsin(angle) * SEED_SPEED,
+            blast_radius: SEED_RADIUS,
+            damage: SEED_DAMAGE,
+            fuse: SEED_FUSE,
         });
     }
 }
@@ -833,6 +922,39 @@ fn update_mines(world: &mut WorldState) {
             carve_circle(&mut world.mask, mx, my, br);
             apply_blast(world, mx, my, br, dmg);
             world.mines.remove(i);
+        }
+    }
+}
+
+/// Advance sub-munitions: gravity, motion, then detonate on impact or fuse.
+/// Ported from `updateSubMunitions` in `src/sim/World.ts`.
+fn update_sub_munitions(world: &mut WorldState) {
+    let width = world.mask.width as f64;
+    let height = world.mask.height as f64;
+    let mut i = world.sub_munitions.len();
+    while i > 0 {
+        i -= 1;
+        {
+            let s = &mut world.sub_munitions[i];
+            s.vel_y += SUB_GRAVITY * FIXED_DT;
+            s.x += s.vel_x * FIXED_DT;
+            s.y += s.vel_y * FIXED_DT;
+            if s.fuse > 0 {
+                s.fuse -= 1;
+            }
+        }
+        let (sx, sy, fuse, br, dmg) = {
+            let s = &world.sub_munitions[i];
+            (s.x, s.y, s.fuse, s.blast_radius, s.damage)
+        };
+        if sx < -50.0 || sx > width + 50.0 || sy > height + 50.0 {
+            world.sub_munitions.remove(i); // flew offscreen: gone, no blast
+            continue;
+        }
+        if is_solid(&world.mask, sx, sy) || fuse == 0 {
+            carve_circle(&mut world.mask, sx, sy, br);
+            apply_blast(world, sx, sy, br, dmg);
+            world.sub_munitions.remove(i);
         }
     }
 }

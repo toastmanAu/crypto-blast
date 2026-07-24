@@ -134,6 +134,17 @@ export function serializeWorld(world: WorldState): Uint8Array {
     w.u32(m.armTicks);
   }
 
+  w.u32(world.subMunitions.length);
+  for (const s of world.subMunitions) {
+    w.f(s.x);
+    w.f(s.y);
+    w.f(s.velX);
+    w.f(s.velY);
+    w.f(s.blastRadius);
+    w.f(s.damage);
+    w.u32(s.fuse);
+  }
+
   w.bytes(world.mask.data);
   return w.finish();
 }

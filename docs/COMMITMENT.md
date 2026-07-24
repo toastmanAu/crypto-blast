@@ -91,7 +91,9 @@ the same append-only contract as `WEAPON_ORDER`):
 | 22 | per gas cloud: `x, y, radius` each f, `ticksLeft` u32, `damagePerTick` f | 4×f + u32 |
 | 23 | `mines.length` | u32 |
 | 24 | per mine: `x, y, triggerRadius, blastRadius, damage` each f, `armTicks` u32 | 5×f + u32 |
-| 25 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
+| 25 | `subMunitions.length` | u32 |
+| 26 | per sub-munition: `x, y, velX, velY, blastRadius, damage` each f, `fuse` u32 | 6×f + u32 |
+| 27 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
 
 Render-only fields (`prevX/prevY`, `prevPos`, the per-tick `events` array) are
 **not** serialized and have no effect on the commitment.
@@ -130,7 +132,7 @@ proves the measured cycles are for the *correct* computation.
 | Measurement | Binary | Cycles | Notes |
 |-------------|--------|-------:|-------|
 | **Phase 0 — commit only** | `verifier/bench` `bench` | **24,679,515 (23.5M)** | blake2b-256 over the 921,988-byte canonical fixture; no sim, no alloc. The hashing floor. |
-| **Phase 1 — full match** | `verifier/bench` `replay` | **55,010,368 (52.5M)** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0xc68550fd…f544`. |
+| **Phase 1 — full match** | `verifier/bench` `replay` | **55,010,368 (52.5M)** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0x7212f717…d688`. |
 
 **Phase-1 gate: 52.5M cycles vs xxuejie's ~150M reference → ~2.7× under budget.**
 The full replay costs only ~30M cycles more than the hash alone, i.e. the entire
