@@ -412,6 +412,19 @@ function detonate(world: WorldState, x: number, y: number, radius: number): void
   world.events.push({ type: 'detonation', x, y, radius });
   const weapon = world.shot ? weaponAt(world.shot.weapon) : weaponAt(0);
   applyBlast(world, x, y, radius, weapon.damage);
+  if (weapon.id === 'bridge') teleportActiveApe(world, x, y);
+}
+
+/** Bridge: relocate the firing ape to the impact column, standing on the surface
+ *  (or dropped from the impact height if the column was carved away). */
+function teleportActiveApe(world: WorldState, x: number, y: number): void {
+  const ape = world.apes[world.activeApe];
+  if (!alive(ape, world.height)) return;
+  const surf = columnSurface(world.mask, x);
+  ape.x = x;
+  ape.y = surf !== null ? surf - APE_HEIGHT / 2 - 1 : y - APE_HEIGHT / 2;
+  ape.velX = 0;
+  ape.velY = 0;
 }
 
 /** Radial falloff damage + knockback to every living ape within `radius`. */

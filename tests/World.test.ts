@@ -499,3 +499,31 @@ describe('locomotion: movement budget', () => {
     expect(commitHex(a)).not.toBe(commitHex(b));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Weapons: Bridge teleport
+// ---------------------------------------------------------------------------
+
+describe('weapons: bridge teleport', () => {
+  it('relocates the firing ape to the impact column', () => {
+    const w = createWorld(1234, W, H);
+    const firer = w.activeApe;
+    w.selectedWeapon = 5; // bridge
+    w.aim.facing = 1;
+    w.aim.elevation = Math.PI / 6; // 30° — elevation is in radians (0=horizon, PI/2=up)
+    w.aim.power = 1;
+    w.aim.isCharging = true;
+    const startX = w.apes[firer].x;
+    stepWorld(w, mk({ fireReleased: true })); // launch the bridge at full power
+    let impactX: number | null = null;
+    for (let i = 0; i < 400 && w.phase !== 'AIMING'; i++) {
+      stepWorld(w, idle);
+      const ev = w.events.find((e) => e.type === 'detonation');
+      if (ev) impactX = ev.x;
+    }
+    expect(impactX).not.toBeNull();                      // detonated in-bounds
+    const a = w.apes[firer];
+    expect(Math.abs(a.x - (impactX as number))).toBeLessThan(2); // stood on the impact column
+    expect(Math.abs(a.x - startX)).toBeGreaterThan(20);          // actually relocated
+  });
+});

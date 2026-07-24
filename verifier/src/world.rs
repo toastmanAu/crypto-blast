@@ -680,11 +680,34 @@ fn advance_shot(world: &mut WorldState) {
 /// the TS weapon lookup for damage.
 fn detonate(world: &mut WorldState, x: f64, y: f64, radius: f64) {
     carve_circle(&mut world.mask, x, y, radius);
-    let damage = match &world.shot {
-        Some(shot) => weapon_at(shot.weapon as usize).damage,
-        None => weapon_at(0).damage,
+    let weapon = match &world.shot {
+        Some(shot) => weapon_at(shot.weapon as usize),
+        None => weapon_at(0),
     };
-    apply_blast(world, x, y, radius, damage);
+    apply_blast(world, x, y, radius, weapon.damage);
+    if weapon.id == "bridge" {
+        teleport_active_ape(world, x, y);
+    }
+}
+
+/// Bridge: relocate the firing ape to the impact column, standing on the surface
+/// (or dropped from the impact height if the column was carved away).
+/// Ported from `teleportActiveApe` in `src/sim/World.ts`.
+fn teleport_active_ape(world: &mut WorldState, x: f64, y: f64) {
+    let height = world.mask.height as f64;
+    let active = world.active_ape as usize;
+    if !alive(&world.apes[active], height) {
+        return;
+    }
+    let new_y = match column_surface(&world.mask, x) {
+        Some(s) => s as f64 - APE_HEIGHT / 2.0 - 1.0,
+        None => y - APE_HEIGHT / 2.0,
+    };
+    let ape = &mut world.apes[active];
+    ape.x = x;
+    ape.y = new_y;
+    ape.vel_x = 0.0;
+    ape.vel_y = 0.0;
 }
 
 /// Radial falloff damage + knockback to every living ape within `radius`.
