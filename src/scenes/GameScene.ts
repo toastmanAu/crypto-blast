@@ -14,6 +14,7 @@ import { nextRandom } from '../core/rng';
 import { downloadJson } from '../util/download';
 import { WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
 import { WeaponWheel, slotFromAngle } from '../render/WeaponWheel';
+import { HazardRenderer } from '../render/HazardRenderer';
 
 // Terrain variant counts (public/sprites/manifest.json terrainSet entries).
 const TERRAIN_DIRT_COUNT = 13;
@@ -93,6 +94,7 @@ export class GameScene extends Phaser.Scene {
   private powerBar!: Phaser.GameObjects.Rectangle;
   private hud!: Phaser.GameObjects.Text;
   private wheel!: WeaponWheel;
+  private hazards!: HazardRenderer;
   private wheelKey!: Phaser.Input.Keyboard.Key;
   private numberKeys!: Phaser.Input.Keyboard.Key[];
   private pendingSelect: number | undefined;
@@ -174,6 +176,7 @@ export class GameScene extends Phaser.Scene {
     });
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
     this.scatterCrystals(); // decor: drawn above terrain, below the apes added later
+    this.hazards = new HazardRenderer(this); // gas clouds / mines / sub-munitions
 
     this.anims.create({
       key: 'explode',
@@ -192,7 +195,8 @@ export class GameScene extends Phaser.Scene {
     for (const ape of this.world.apes) {
       const colour = ape.team === 0 ? TEAM0_COLOUR : TEAM1_COLOUR;
       this.teamMarkers.push(
-        this.add.ellipse(ape.x, ape.y + APE_HEIGHT / 2, APE_WIDTH * 1.7, APE_WIDTH * 0.65, colour, 0.6),
+        this.add.ellipse(ape.x, ape.y + APE_HEIGHT / 2, APE_WIDTH * 1.7, APE_WIDTH * 0.65, colour, 0.6)
+          .setDepth(2),
       );
     }
 
@@ -200,7 +204,7 @@ export class GameScene extends Phaser.Scene {
     // Texture/anim (idle/walk/jump) is chosen each frame in render() from velocities;
     // team 1 is tinted pink. Facing is set each frame too.
     for (const ape of this.world.apes) {
-      const sprite = this.add.sprite(ape.x, ape.y + APE_HEIGHT / 2, 'apeIdle').setOrigin(0.5, 1);
+      const sprite = this.add.sprite(ape.x, ape.y + APE_HEIGHT / 2, 'apeIdle').setOrigin(0.5, 1).setDepth(2);
       this.scaleApe(sprite);
       if (ape.team === 1) sprite.setTint(APE_TINT_TEAM1);
       this.apeSprites.push(sprite);
@@ -217,12 +221,13 @@ export class GameScene extends Phaser.Scene {
     this.aimArm = this.add.image(0, 0, 'apeAimArm')
       .setOrigin(0.57, 0.06)
       .setScale(APE_DISPLAY_H / APE_BODY_ART_H)
-      .setVisible(false);
+      .setVisible(false)
+      .setDepth(4);
 
     for (let i = 0; i < this.world.apes.length; i++) {
-      this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5));
+      this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5).setDepth(4));
     }
-    this.activeMarker = this.add.triangle(0, 0, 0, 0, 12, 0, 6, 10, 0xffffff);
+    this.activeMarker = this.add.triangle(0, 0, 0, 0, 12, 0, 6, 10, 0xffffff).setDepth(4);
     this.banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, '', {
       color: '#ffffff', fontSize: '48px', backgroundColor: '#000000aa', padding: { x: 16, y: 10 },
     }).setOrigin(0.5).setVisible(false);
@@ -474,7 +479,7 @@ export class GameScene extends Phaser.Scene {
       const shotKey = WEAPON_ORDER[w.shot.weapon];
       if (!this.shotSprite || this.shotSpriteKey !== shotKey) {
         this.shotSprite?.destroy();
-        this.shotSprite = this.add.image(0, 0, shotKey);
+        this.shotSprite = this.add.image(0, 0, shotKey).setDepth(5);
         this.shotSprite.setScale(36 / this.shotSprite.width); // ~36px long
         this.shotSpriteKey = shotKey;
       }
@@ -498,6 +503,9 @@ export class GameScene extends Phaser.Scene {
       if (this.lastShotPos.y > w.height) this.spawnSplash(this.lastShotPos.x, w.height);
     }
     this.hadShot = !!w.shot;
+
+    // Sync gas clouds / mines / sub-munitions with the sim (render-only).
+    this.hazards.render(w);
 
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
     this.aimLine.setVisible(showMarker);
