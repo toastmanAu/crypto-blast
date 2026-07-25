@@ -73,29 +73,31 @@ the same append-only contract as `WEAPON_ORDER`):
 | 4 | `activeApe` | u32 |
 | 5 | `turnTimer` | u32 |
 | 6 | `resolveTimer` | u32 |
-| 7 | `moveBudget` | f |
-| 8 | `winner ?? 99` | u32 |
-| 9 | `teamNext[0]` | u32 |
-| 10 | `teamNext[1]` | u32 |
-| 11 | `wind` | f |
-| 12 | per ape (in placement order, team 0 first): `team` u32, then `health, x, y, velX, velY` each f | u32 + 5×f |
-| 13 | `aim.facing` | u32 |
-| 14 | `aim.elevation` | f |
-| 15 | `aim.power` | f |
-| 16 | `aim.isCharging ? 1 : 0` | u32 |
-| 17 | `selectedWeapon` | u32 |
-| 18 | `ammo[team][weapon]` for every team, every weapon (row-major) | u32 each |
-| 19 | `shot ? 1 : 0` | u32 |
-| 20 | if shot present: `pos.x, pos.y, vel.x, vel.y` each f, then `weapon` u32 | 4×f + u32 |
-| 21 | `gasClouds.length` | u32 |
-| 22 | per gas cloud: `x, y, radius` each f, `ticksLeft` u32, `damagePerTick` f | 4×f + u32 |
-| 23 | `mines.length` | u32 |
-| 24 | per mine: `x, y, triggerRadius, blastRadius, damage` each f, `armTicks` u32 | 5×f + u32 |
-| 25 | `subMunitions.length` | u32 |
-| 26 | per sub-munition: `x, y, velX, velY, blastRadius, damage` each f, `fuse` u32 | 6×f + u32 |
-| 27 | `crates.length` | u32 |
-| 28 | per crate: `x, y` f, `kind` u32 (0=weapon,1=health), `weapon` u32, `amount` u32, `landed` u32 | 2×f + 4×u32 |
-| 29 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
+| 7 | `turn` (completed turn count, drives sudden death) | u32 |
+| 8 | `waterLevel` (y of the waterline; rises in sudden death) | f |
+| 9 | `moveBudget` | f |
+| 10 | `winner ?? 99` | u32 |
+| 11 | `teamNext[0]` | u32 |
+| 12 | `teamNext[1]` | u32 |
+| 13 | `wind` | f |
+| 14 | per ape (in placement order, team 0 first): `team` u32, then `health, x, y, velX, velY` each f | u32 + 5×f |
+| 15 | `aim.facing` | u32 |
+| 16 | `aim.elevation` | f |
+| 17 | `aim.power` | f |
+| 18 | `aim.isCharging ? 1 : 0` | u32 |
+| 19 | `selectedWeapon` | u32 |
+| 20 | `ammo[team][weapon]` for every team, every weapon (row-major) | u32 each |
+| 21 | `shot ? 1 : 0` | u32 |
+| 22 | if shot present: `pos.x, pos.y, vel.x, vel.y` each f, then `weapon` u32 | 4×f + u32 |
+| 23 | `gasClouds.length` | u32 |
+| 24 | per gas cloud: `x, y, radius` each f, `ticksLeft` u32, `damagePerTick` f | 4×f + u32 |
+| 25 | `mines.length` | u32 |
+| 26 | per mine: `x, y, triggerRadius, blastRadius, damage` each f, `armTicks` u32 | 5×f + u32 |
+| 27 | `subMunitions.length` | u32 |
+| 28 | per sub-munition: `x, y, velX, velY, blastRadius, damage` each f, `fuse` u32 | 6×f + u32 |
+| 29 | `crates.length` | u32 |
+| 30 | per crate: `x, y` f, `kind` u32 (0=weapon,1=health), `weapon` u32, `amount` u32, `landed` u32 | 2×f + 4×u32 |
+| 31 | `mask.data` (terrain occupancy, `width*height` bytes, 1=solid) | bytes |
 
 Render-only fields (`prevX/prevY`, `prevPos`, the per-tick `events` array) are
 **not** serialized and have no effect on the commitment.
@@ -134,7 +136,7 @@ proves the measured cycles are for the *correct* computation.
 | Measurement | Binary | Cycles | Notes |
 |-------------|--------|-------:|-------|
 | **Phase 0 — commit only** | `verifier/bench` `bench` | **24,679,515 (23.5M)** | blake2b-256 over the 921,988-byte canonical fixture; no sim, no alloc. The hashing floor. |
-| **Phase 1 — full match** | `verifier/bench` `replay` | **~55M** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0xd70dbef3…490f`. |
+| **Phase 1 — full match** | `verifier/bench` `replay` | **~55M** | `create_world(1234,1280,720)` + `step_world ×304` + `serialize_world` + blake2b-256, replaying the demo tape, self-gated on `0xd317d8ca…31d4`. |
 
 **Phase-1 gate: 52.5M cycles vs xxuejie's ~150M reference → ~2.7× under budget.**
 The full replay costs only ~30M cycles more than the hash alone, i.e. the entire

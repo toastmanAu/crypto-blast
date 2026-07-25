@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
   APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS, MINE_ARM_TICKS, CLUSTER_COUNT,
-  CRATE_HEALTH, CRATE_AMMO,
+  CRATE_HEALTH, CRATE_AMMO, SUDDEN_DEATH_TURN, WATER_RISE_PER_TURN, DROWN_DAMAGE_PER_TICK,
 } from '../src/sim/World';
 import type { TickInput } from '../src/sim/World';
 import { isSolid } from '../src/physics/DestructibleTerrain';
@@ -743,5 +743,52 @@ describe('supply crates', () => {
     expect(commitHex(a)).toBe(commitHex(b));
     a.crates.push({ x: 100, y: 100, kind: 'health', weapon: -1, amount: 25, landed: false });
     expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sudden death (rising water)
+// ---------------------------------------------------------------------------
+
+describe('sudden death', () => {
+  it('waterLevel starts at the bottom (no flooding)', () => {
+    expect(createWorld(1234, W, H).waterLevel).toBe(H);
+  });
+
+  it('water rises by WATER_RISE_PER_TURN once sudden death begins', () => {
+    const w = createWorld(1234, W, H);
+    w.turn = SUDDEN_DEATH_TURN - 1; // one turn away
+    w.turnTimer = 1;                // this idle tick ends the turn
+    const before = w.waterLevel;
+    stepWorld(w, idle);
+    expect(w.turn).toBe(SUDDEN_DEATH_TURN);
+    expect(w.waterLevel).toBe(before - WATER_RISE_PER_TURN);
+  });
+
+  it('water does not rise before sudden death', () => {
+    const w = createWorld(1234, W, H);
+    w.turn = 0;
+    w.turnTimer = 1;
+    const before = w.waterLevel;
+    stepWorld(w, idle); // ends turn 0 → turn 1 (< 30)
+    expect(w.waterLevel).toBe(before);
+  });
+
+  it('an ape below the waterline drowns', () => {
+    const w = createWorld(1234, W, H);
+    const ape = w.apes[0];
+    w.waterLevel = ape.y; // water at the centre → feet submerged
+    const before = ape.health;
+    stepWorld(w, idle);
+    expect(ape.health).toBe(before - DROWN_DAMAGE_PER_TICK);
+  });
+
+  it('an ape above the waterline is safe', () => {
+    const w = createWorld(1234, W, H);
+    const ape = w.apes[0];
+    w.waterLevel = H; // water at the very bottom
+    const before = ape.health;
+    stepWorld(w, idle);
+    expect(ape.health).toBe(before);
   });
 });

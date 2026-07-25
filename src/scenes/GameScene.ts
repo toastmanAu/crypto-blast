@@ -17,6 +17,7 @@ import { WeaponWheel, slotFromAngle } from '../render/WeaponWheel';
 import { HazardRenderer } from '../render/HazardRenderer';
 import { CrateRenderer } from '../render/CrateRenderer';
 import { AIPlayer } from '../ai/AIPlayer';
+import { SoundManager } from '../audio/SoundManager';
 
 // Terrain variant counts (public/sprites/manifest.json terrainSet entries).
 const TERRAIN_DIRT_COUNT = 13;
@@ -81,6 +82,7 @@ export class GameScene extends Phaser.Scene {
   private accumulator = 0;
   private aiTeams: number[] = [];
   private ai = new AIPlayer();
+  private sfx = new SoundManager();
 
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
@@ -96,6 +98,12 @@ export class GameScene extends Phaser.Scene {
   private healthBars: Phaser.GameObjects.Rectangle[] = [];
   private activeMarker!: Phaser.GameObjects.Triangle;
   private banner!: Phaser.GameObjects.Text;
+  private turnBanner!: Phaser.GameObjects.Text;
+  private lastTurnApe = -1;          // active ape last frame — a change triggers the turn banner
+  private gameOverShown = false;     // game-over overlay drawn once
+  private rematchKey!: Phaser.Input.Keyboard.Key;
+  private water!: Phaser.GameObjects.Rectangle;       // sudden-death flood body
+  private waterSurface!: Phaser.GameObjects.Rectangle; // bright waterline
   private shotSprite: Phaser.GameObjects.Image | null = null;
   private aimArm!: Phaser.GameObjects.Image;
   private aimLine!: Phaser.GameObjects.Line;
@@ -240,9 +248,15 @@ export class GameScene extends Phaser.Scene {
       this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5).setDepth(4));
     }
     this.activeMarker = this.add.triangle(0, 0, 0, 0, 12, 0, 6, 10, 0xffffff).setDepth(4);
-    this.banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, '', {
-      color: '#ffffff', fontSize: '48px', backgroundColor: '#000000aa', padding: { x: 16, y: 10 },
-    }).setOrigin(0.5).setVisible(false);
+    // Sudden-death flood: a translucent body + a bright waterline, raised each turn.
+    this.water = this.add.rectangle(0, 0, GAME_WIDTH, 0, 0x2266cc, 0.42).setOrigin(0, 0).setDepth(3);
+    this.waterSurface = this.add.rectangle(0, 0, GAME_WIDTH, 3, 0x66ccff, 0.85).setOrigin(0, 0).setDepth(3);
+    this.banner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 20, '', {
+      color: '#ffffff', fontSize: '52px', fontStyle: 'bold', backgroundColor: '#000000cc', padding: { x: 20, y: 12 },
+    }).setOrigin(0.5).setVisible(false).setDepth(10);
+    this.turnBanner = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, '', {
+      color: '#ffffff', fontSize: '40px', fontStyle: 'bold', backgroundColor: '#000000aa', padding: { x: 18, y: 10 },
+    }).setOrigin(0.5).setVisible(false).setDepth(9);
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
     this.powerBar = this.add.rectangle(20, GAME_HEIGHT - 30, 0, 14, 0xff5544).setOrigin(0, 0.5);
@@ -271,7 +285,13 @@ export class GameScene extends Phaser.Scene {
       Phaser.Input.Keyboard.KeyCodes.THREE, Phaser.Input.Keyboard.KeyCodes.FOUR,
       Phaser.Input.Keyboard.KeyCodes.FIVE, Phaser.Input.Keyboard.KeyCodes.SIX,
     ].map((c) => keyboard.addKey(c));
+    this.rematchKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.input.keyboard!.addCapture('TAB');
+
+    // Unlock Web Audio on the first gesture (browser autoplay policy).
+    const unlock = (): void => this.sfx.unlock();
+    this.input.once('pointerdown', unlock);
+    keyboard.once('keydown-SPACE', unlock);
   }
 
   update(time: number, delta: number): void {
@@ -287,16 +307,77 @@ export class GameScene extends Phaser.Scene {
     const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < steps; i++) {
       const input = this.isAiTurn() ? this.ai.nextInput(this.world) : this.takeTickInput();
+      if (input.jumpPressed) this.sfx.jump();
       stepWorld(this.world, input);
       recordTick(this.tape, input);
       this.applyEvents(this.world.events);
     }
     this.accumulator = remainder;
 
+    // Turn-change banner: a new active ape (in AIMING) announces whose turn it is.
+    if (this.world.phase === 'AIMING' && this.world.activeApe !== this.lastTurnApe) {
+      this.showTurnBanner();
+    }
+    this.lastTurnApe = this.world.activeApe;
+
+    // Game-over overlay (drawn once) + rematch.
+    if (this.world.phase === 'GAMEOVER') {
+      if (!this.gameOverShown) this.showGameOver();
+      if (Phaser.Input.Keyboard.JustDown(this.rematchKey)) {
+        this.scene.restart({ aiTeams: this.aiTeams });
+        return;
+      }
+    }
+
     // Frame-level action, NOT a sim tick — must not enter the tape.
     if (Phaser.Input.Keyboard.JustDown(this.keys.save)) this.exportTape();
 
     this.render(this.accumulator / FIXED_DT);
+  }
+
+  /** Pop a banner announcing whose turn just started, then fade it out. */
+  private showTurnBanner(): void {
+    const active = this.world.apes[this.world.activeApe];
+    const isAi = this.aiTeams.includes(active.team);
+    const label = this.aiTeams.length > 0
+      ? (isAi ? 'ENEMY TURN' : 'YOUR TURN')
+      : (active.team === 0 ? 'PLAYER 1' : 'PLAYER 2');
+    const color = active.team === 0 ? '#33ddaa' : '#ff77bb';
+    this.sfx.turn();
+    this.tweens.killTweensOf(this.turnBanner);
+    this.turnBanner.setText(label).setColor(color).setVisible(true).setScale(0.6).setAlpha(0);
+    this.tweens.add({
+      targets: this.turnBanner,
+      scale: 1, alpha: 1,
+      duration: 250,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: this.turnBanner,
+          alpha: 0,
+          delay: 900,
+          duration: 400,
+          onComplete: () => this.turnBanner.setVisible(false),
+        });
+      },
+    });
+  }
+
+  /** Dim the field and show the result + a rematch prompt (drawn once). */
+  private showGameOver(): void {
+    this.gameOverShown = true;
+    const w = this.world;
+    this.sfx.win();
+    this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.6).setDepth(9);
+    const msg = w.winner === -1 ? 'DRAW' : `TEAM ${w.winner === 0 ? 'GREEN' : 'PINK'} WINS`;
+    const color = w.winner === 0 ? '#33ddaa' : w.winner === 1 ? '#ff77bb' : '#ffffff';
+    this.banner.setText(msg).setColor(color).setVisible(true);
+    const prompt = this.aiTeams.length > 0
+      ? (w.winner === 1 ? 'you lost — press R for rematch' : 'you win! — press R for rematch')
+      : 'press R for rematch';
+    this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 50, prompt, {
+      color: '#cccccc', fontSize: '20px',
+    }).setOrigin(0.5).setDepth(10);
   }
 
   /** True while an AI-controlled team owns the active turn (aiming or resolving). */
@@ -402,8 +483,10 @@ export class GameScene extends Phaser.Scene {
         boom.play('explode');
         boom.once('animationcomplete', () => boom.destroy());
         this.spawnSmoke(ev.x, ev.y); // lingering smoke where the blast hit
+        this.sfx.explosion();
       } else if (ev.type === 'crate') {
         this.crates.spawnPickup(ev.x, ev.y, ev.kind);
+        this.sfx.pickup();
       }
     }
   }
@@ -499,6 +582,7 @@ export class GameScene extends Phaser.Scene {
     if (w.shot && !this.hadShot) {
       const m = muzzle(w);
       this.spawnMuzzleFlash(m.x, m.y, w.aim.facing >= 0);
+      this.sfx.fire();
     }
 
     if (w.shot) {
@@ -534,6 +618,16 @@ export class GameScene extends Phaser.Scene {
     this.hazards.render(w);
     this.crates.render(w);
 
+    // Sudden-death flood: raise the waterline as the sim dictates.
+    const flooded = w.waterLevel < w.height;
+    this.water.setVisible(flooded);
+    this.waterSurface.setVisible(flooded);
+    if (flooded) {
+      this.water.y = w.waterLevel;
+      this.water.height = w.height - w.waterLevel;
+      this.waterSurface.y = w.waterLevel - 1;
+    }
+
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
     this.aimLine.setVisible(showMarker);
     if (showMarker) this.drawAim();
@@ -549,11 +643,6 @@ export class GameScene extends Phaser.Scene {
     this.hud.setText(
       `Team ${teamName}   Time ${secs}s   Move ${movePx}px   Wind ${w.wind.toFixed(0)}   Aim ${face} ${elev}°   Weapon ${wName} (${ammoStr})   [A/D walk · W jump · ←/→ face · ↑/↓ aim · hold SPACE · T save]`,
     );
-
-    if (w.phase === 'GAMEOVER') {
-      this.banner.setVisible(true);
-      this.banner.setText(w.winner === -1 ? 'DRAW' : `TEAM ${w.winner === 0 ? 'GREEN' : 'PINK'} WINS`);
-    }
   }
 
   /**
@@ -594,6 +683,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Water splash plume at the waterline (ape or shot entering the water). */
   private spawnSplash(x: number, y: number): void {
+    this.sfx.splash();
     const s = this.add.image(x, y, 'waterSplash').setOrigin(0.5, 1).setScale(0.3).setAlpha(0.9);
     this.tweens.add({ targets: s, y: y - 10, alpha: 0, duration: 700, onComplete: () => s.destroy() });
   }
