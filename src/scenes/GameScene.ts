@@ -16,6 +16,7 @@ import { WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
 import { WeaponWheel, slotFromAngle } from '../render/WeaponWheel';
 import { HazardRenderer } from '../render/HazardRenderer';
 import { CrateRenderer } from '../render/CrateRenderer';
+import { AIPlayer } from '../ai/AIPlayer';
 
 // Terrain variant counts (public/sprites/manifest.json terrainSet entries).
 const TERRAIN_DIRT_COUNT = 13;
@@ -69,11 +70,17 @@ interface FrameInput {
  * with interpolation. No game logic lives here — it all lives in sim/World.ts,
  * which is what lets a match be replayed and verified headlessly.
  */
+export interface GameConfig {
+  aiTeams?: number[]; // teams controlled by the AI (e.g. [1] for 1P vs AI)
+}
+
 export class GameScene extends Phaser.Scene {
   private world!: WorldState;
   private tape!: GameTape;
   private terrain!: TerrainRenderer;
   private accumulator = 0;
+  private aiTeams: number[] = [];
+  private ai = new AIPlayer();
 
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
@@ -167,7 +174,9 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  create(): void {
+  create(data?: GameConfig): void {
+    this.aiTeams = data?.aiTeams ?? [];
+    this.ai = new AIPlayer(); // fresh bot per match (scene instances are reused)
     this.world = createWorld(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
     this.tape = createTape(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
 
@@ -267,12 +276,17 @@ export class GameScene extends Phaser.Scene {
 
   update(time: number, delta: number): void {
     this.now = time;
-    this.sampleInput();
+    // Human input is ignored while an AI team owns the turn.
+    if (this.isAiTurn()) {
+      if (this.wheel.isOpen) this.wheel.close();
+    } else {
+      this.sampleInput();
+    }
 
     this.accumulator += delta / 1000;
     const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < steps; i++) {
-      const input = this.takeTickInput();
+      const input = this.isAiTurn() ? this.ai.nextInput(this.world) : this.takeTickInput();
       stepWorld(this.world, input);
       recordTick(this.tape, input);
       this.applyEvents(this.world.events);
@@ -283,6 +297,13 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.keys.save)) this.exportTape();
 
     this.render(this.accumulator / FIXED_DT);
+  }
+
+  /** True while an AI-controlled team owns the active turn (aiming or resolving). */
+  private isAiTurn(): boolean {
+    if (this.world.phase === 'GAMEOVER') return false;
+    const active = this.world.apes[this.world.activeApe];
+    return this.aiTeams.includes(active.team);
   }
 
   /** Download the recorded tape and show the exact command to verify it. */
