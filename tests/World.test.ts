@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createWorld, commitWorld, stepWorld, alive, teamApeIndices, APES_PER_TEAM, APE_MAX_HEALTH, detonateAt, FALL_DAMAGE_THRESHOLD, TURN_TICKS,
   APE_HEIGHT, MAX_STEP, WALK_BUDGET, JUMP_COST, GAS_TICKS, MINE_ARM_TICKS, CLUSTER_COUNT,
+  CRATE_HEALTH, CRATE_AMMO,
 } from '../src/sim/World';
 import type { TickInput } from '../src/sim/World';
 import { isSolid } from '../src/physics/DestructibleTerrain';
@@ -690,6 +691,57 @@ describe('weapons: cluster + seed sub-munitions', () => {
     const b = createWorld(7, W, H);
     expect(commitHex(a)).toBe(commitHex(b));
     a.subMunitions.push({ x: 100, y: 100, velX: 10, velY: -10, blastRadius: 20, damage: 14, fuse: -1 });
+    expect(commitHex(a)).not.toBe(commitHex(b));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Supply crates
+// ---------------------------------------------------------------------------
+
+describe('supply crates', () => {
+  it('spawns a supply crate at world creation', () => {
+    const w = createWorld(1234, W, H);
+    expect(w.crates.length).toBe(1);
+  });
+
+  it('a crate parachutes down and lands on the terrain', () => {
+    const w = createWorld(1234, W, H);
+    const c = w.crates[0];
+    c.x = 640; // centre of the map, clear of every ape
+    for (let i = 0; i < 1200 && !c.landed; i++) stepWorld(w, idle);
+    expect(c.landed).toBe(true);
+    expect(c.y).toBeLessThan(H); // settled on the surface, not fallen out
+  });
+
+  it('collecting a weapon crate adds ammo to the collector team', () => {
+    const w = createWorld(1234, W, H);
+    const ape = w.apes[w.activeApe];
+    const weapon = 2; // airdropCluster
+    w.crates.length = 0;
+    w.crates.push({ x: ape.x, y: ape.y, kind: 'weapon', weapon, amount: CRATE_AMMO, landed: true });
+    const before = w.ammo[ape.team][weapon];
+    stepWorld(w, idle);
+    expect(w.ammo[ape.team][weapon]).toBe(before + CRATE_AMMO);
+    expect(w.crates.length).toBe(0); // collected
+  });
+
+  it('collecting a health crate heals the collector (capped at max)', () => {
+    const w = createWorld(1234, W, H);
+    const ape = w.apes[w.activeApe];
+    ape.health = 50;
+    w.crates.length = 0;
+    w.crates.push({ x: ape.x, y: ape.y, kind: 'health', weapon: -1, amount: CRATE_HEALTH, landed: true });
+    stepWorld(w, idle);
+    expect(ape.health).toBe(50 + CRATE_HEALTH);
+    expect(w.crates.length).toBe(0);
+  });
+
+  it('crates are part of the commitment', () => {
+    const a = createWorld(7, W, H);
+    const b = createWorld(7, W, H);
+    expect(commitHex(a)).toBe(commitHex(b));
+    a.crates.push({ x: 100, y: 100, kind: 'health', weapon: -1, amount: 25, landed: false });
     expect(commitHex(a)).not.toBe(commitHex(b));
   });
 });

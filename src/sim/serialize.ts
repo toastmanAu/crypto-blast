@@ -145,6 +145,16 @@ export function serializeWorld(world: WorldState): Uint8Array {
     w.u32(s.fuse);
   }
 
+  w.u32(world.crates.length);
+  for (const c of world.crates) {
+    w.f(c.x);
+    w.f(c.y);
+    w.u32(c.kind === 'weapon' ? 0 : 1); // 0 = weapon, 1 = health
+    w.u32(c.weapon);
+    w.u32(c.amount);
+    w.u32(c.landed ? 1 : 0);
+  }
+
   w.bytes(world.mask.data);
   return w.finish();
 }
