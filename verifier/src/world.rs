@@ -61,6 +61,13 @@ const SEED_SPEED: f64 = 240.0;
 const SEED_RADIUS: f64 = 32.0;
 const SEED_DAMAGE: f64 = 22.0;
 const SEED_FUSE: i64 = 45; // ticks until a sub-bomb airbursts (0.9 s)
+// Supply crates: parachute in at the start of each turn; collected on contact.
+const MAX_CRATES: usize = 3; // max crates on the map at once
+const CRATE_SIZE: f64 = 22.0; // px (square)
+const CRATE_FALL_SPEED: f64 = 70.0; // px/s parachute descent
+const CRATE_HEALTH: i64 = 25; // HP restored by a health crate
+const CRATE_AMMO: i64 = 1; // rounds added by a weapon crate
+const CRATE_COLLECT_DIST: f64 = 28.0; // px contact radius to collect a crate
 const SUB_GRAVITY: f64 = 800.0; // px/s^2 on sub-munitions
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
@@ -153,6 +160,27 @@ pub struct SubMunition {
     pub fuse: i64,
 }
 
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+#[cfg_attr(feature = "std", serde(rename_all = "lowercase"))]
+pub enum CrateKind {
+    Weapon,
+    Health,
+}
+
+/// A supply crate: parachutes in, lands, and is collected on contact for ammo
+/// (weapon) or HP (health). Mirrors TS `Crate`.
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(serde::Deserialize))]
+pub struct Crate {
+    pub x: f64,
+    pub y: f64,
+    pub kind: CrateKind,
+    pub weapon: i64,
+    pub amount: i64,
+    pub landed: bool,
+}
+
 /// Mirror of the TS `WorldState`, holding only the fields `serialize_world`
 /// reads (plus the raw terrain `mask`, which is loaded separately from a binary
 /// sidecar rather than from JSON). Unknown JSON fields (`width`, `height`,
@@ -195,6 +223,8 @@ pub struct WorldState {
     /// Cluster shrapnel / seed sub-bombs in flight.
     #[cfg_attr(feature = "std", serde(rename = "subMunitions"))]
     pub sub_munitions: Vec<SubMunition>,
+    /// Supply crates parachuting in / landed, awaiting pickup.
+    pub crates: Vec<Crate>,
     /// Terrain occupancy mask (width/height + raw bytes). Carries its own
     /// dimensions so physics helpers and `alive()` can use them (the world's
     /// width/height are not otherwise stored). The `data` bytes are appended
@@ -309,6 +339,19 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
         w.u32(s.fuse);
     }
 
+    w.u32(world.crates.len() as i64);
+    for c in &world.crates {
+        w.f(c.x);
+        w.f(c.y);
+        w.u32(match c.kind {
+            CrateKind::Weapon => 0,
+            CrateKind::Health => 1,
+        });
+        w.u32(c.weapon);
+        w.u32(c.amount);
+        w.u32(if c.landed { 1 } else { 0 });
+    }
+
     w.bytes(&world.mask.data);
     w.buf
 }
@@ -356,7 +399,7 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         .map(|i| weapon_at(i).ammo_start as i64)
         .collect();
 
-    WorldState {
+    let mut world = WorldState {
         tick: 0,
         rng: next as i64,
         phase: "AIMING".to_string(),
@@ -375,8 +418,11 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         gas_clouds: vec![],
         mines: vec![],
         sub_munitions: vec![],
+        crates: vec![],
         mask,
-    }
+    };
+    spawn_crate(&mut world); // first turn's supply drop
+    world
 }
 
 /// Load a fixture world: deserialize the struct (minus mask) from
@@ -536,6 +582,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
     update_gas_clouds(world);
     update_mines(world);
     update_sub_munitions(world);
+    update_crates(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -637,6 +684,44 @@ fn reroll_turn(world: &mut WorldState) {
     world.turn_timer = TURN_TICKS;
     world.resolve_timer = 0;
     world.move_budget = WALK_BUDGET;
+    spawn_crate(world); // a supply drop each turn (capped at MAX_CRATES)
+}
+
+/// Drop a supply crate at a random column (if the map isn't already full).
+/// ~40% are health crates; the rest grant a random finite-ammo weapon.
+/// Ported from `spawnCrate` in `src/sim/World.ts`.
+fn spawn_crate(world: &mut WorldState) {
+    if world.crates.len() >= MAX_CRATES {
+        return;
+    }
+    let margin = 60.0;
+    let (rx, next) = next_random(world.rng as i32);
+    world.rng = next as i64;
+    let x = margin + rx * (world.mask.width as f64 - 2.0 * margin);
+    let (rk, next) = next_random(world.rng as i32);
+    world.rng = next as i64;
+    if rk < 0.4 {
+        world.crates.push(Crate {
+            x,
+            y: -CRATE_SIZE,
+            kind: CrateKind::Health,
+            weapon: -1,
+            amount: CRATE_HEALTH,
+            landed: false,
+        });
+        return;
+    }
+    let (rw, next) = next_random(world.rng as i32);
+    world.rng = next as i64;
+    let weapon = 1 + (rw * (WEAPON_COUNT - 1) as f64).floor() as i64; // indices 1..5
+    world.crates.push(Crate {
+        x,
+        y: -CRATE_SIZE,
+        kind: CrateKind::Weapon,
+        weapon,
+        amount: CRATE_AMMO,
+        landed: false,
+    });
 }
 
 /// Ported from `fire` in `src/sim/World.ts`.
@@ -957,6 +1042,70 @@ fn update_sub_munitions(world: &mut WorldState) {
             world.sub_munitions.remove(i);
         }
     }
+}
+
+/// Settle crates onto the terrain (parachute down, re-fall if the ground under
+/// them is destroyed) and let any living ape collect one on contact.
+/// Ported from `updateCrates` in `src/sim/World.ts`.
+fn update_crates(world: &mut WorldState) {
+    let half = CRATE_SIZE / 2.0;
+    let height = world.mask.height as f64;
+    let mut i = world.crates.len();
+    while i > 0 {
+        i -= 1;
+        {
+            // column_surface is only consulted on the landing transition;
+            // steady-state support is a cheap O(1) probe (keeps replay lean).
+            let c = &mut world.crates[i];
+            if !c.landed {
+                c.y += CRATE_FALL_SPEED * FIXED_DT;
+                if is_solid(&world.mask, c.x, c.y + half + 1.0) {
+                    let surface = column_surface(&world.mask, c.x);
+                    c.y = surface.map(|s| s as f64).unwrap_or(height + 999.0) - half;
+                    c.landed = true;
+                }
+            } else if !is_solid(&world.mask, c.x, c.y + half + 1.0) {
+                c.landed = false; // ground destroyed beneath: fall again
+            }
+        }
+        if world.crates[i].y > height + 50.0 {
+            world.crates.remove(i); // fell out of the world
+            continue;
+        }
+        let (cx, cy) = (world.crates[i].x, world.crates[i].y);
+        let mut collector: Option<usize> = None;
+        for (ai, ape) in world.apes.iter().enumerate() {
+            if !alive(ape, height) {
+                continue;
+            }
+            let dx = ape.x - cx;
+            let dy = ape.y - cy;
+            if dx * dx + dy * dy <= CRATE_COLLECT_DIST * CRATE_COLLECT_DIST {
+                collector = Some(ai);
+                break;
+            }
+        }
+        if let Some(ai) = collector {
+            collect_crate(world, ai, i);
+        }
+    }
+}
+
+fn collect_crate(world: &mut WorldState, ape_idx: usize, crate_idx: usize) {
+    let (is_health, weapon, amount) = {
+        let c = &world.crates[crate_idx];
+        (matches!(c.kind, CrateKind::Health), c.weapon, c.amount)
+    };
+    if is_health {
+        let h = world.apes[ape_idx].health;
+        world.apes[ape_idx].health = f64::min(APE_MAX_HEALTH, h + amount as f64);
+    } else {
+        let team = world.apes[ape_idx].team as usize;
+        if world.ammo[team][weapon as usize] >= 0 {
+            world.ammo[team][weapon as usize] += amount;
+        }
+    }
+    world.crates.remove(crate_idx);
 }
 
 /// Bridge: relocate the firing ape to the impact column, standing on the surface

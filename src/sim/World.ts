@@ -56,6 +56,13 @@ export const SEED_SPEED = 240;
 export const SEED_RADIUS = 32;
 export const SEED_DAMAGE = 22;
 export const SEED_FUSE = 45; // ticks until a sub-bomb airbursts (0.9 s)
+// Supply crates: parachute in at the start of each turn; collected on contact.
+export const MAX_CRATES = 3;          // max crates on the map at once
+export const CRATE_SIZE = 22;         // px (square)
+export const CRATE_FALL_SPEED = 70;   // px/s parachute descent
+export const CRATE_HEALTH = 25;       // HP restored by a health crate
+export const CRATE_AMMO = 1;          // rounds added by a weapon crate
+export const CRATE_COLLECT_DIST = 28; // px contact radius to collect a crate
 const SUB_GRAVITY = 800; // px/s^2 on sub-munitions
 const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
@@ -79,7 +86,9 @@ export interface ShotState {
   weapon: number; // WEAPON_ORDER index this shot was fired with
 }
 
-export type SimEvent = { type: 'detonation'; x: number; y: number; radius: number };
+export type SimEvent =
+  | { type: 'detonation'; x: number; y: number; radius: number }
+  | { type: 'crate'; x: number; y: number; kind: CrateKind };
 
 /** A lingering gas cloud left by a Gas Grenade: damages every ape inside its
  *  radius each tick until its lifetime expires. Serialized (affects outcome). */
@@ -116,6 +125,20 @@ export interface SubMunition {
   fuse: number; // ticks to airburst; -1 = impact-only
 }
 
+export type CrateKind = 'weapon' | 'health';
+
+/** A supply crate: parachutes in at the start of a turn, lands on the terrain,
+ *  and is collected on contact — a weapon crate adds ammo to the collector's
+ *  team, a health crate heals the collector. Serialized (affects outcome). */
+export interface Crate {
+  x: number;
+  y: number;
+  kind: CrateKind;
+  weapon: number; // WEAPON_ORDER index for weapon crates; -1 for health
+  amount: number; // ammo added (weapon) or HP restored (health)
+  landed: boolean;
+}
+
 export interface WorldState {
   width: number;
   height: number;
@@ -137,6 +160,7 @@ export interface WorldState {
   gasClouds: GasCloud[];  // lingering gas clouds (Gas Grenade); tick down + DoT each step
   mines: Mine[];          // proximity mines (Llama Bomb); detonate when an ape nears
   subMunitions: SubMunition[]; // cluster shrapnel / seed sub-bombs in flight
+  crates: Crate[];        // supply crates parachuting in / landed, awaiting pickup
   mask: TerrainMask;
   events: SimEvent[];
 }
@@ -189,7 +213,7 @@ export function createWorld(seed: number, width: number, height: number): WorldS
 
   const roll = nextRandom(seed >>> 0);
   const startAmmo = WEAPON_ORDER.map((id) => WEAPONS[id].ammoStart);
-  return {
+  const world: WorldState = {
     width,
     height,
     tick: 0,
@@ -210,9 +234,12 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     gasClouds: [],
     mines: [],
     subMunitions: [],
+    crates: [],
     mask,
     events: [],
   };
+  spawnCrate(world); // first turn's supply drop
+  return world;
 }
 
 /** Logical muzzle of the active ape. */
@@ -295,6 +322,7 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   updateGasClouds(world);
   updateMines(world);
   updateSubMunitions(world);
+  updateCrates(world);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -364,6 +392,27 @@ function rerollTurn(world: WorldState): void {
   world.turnTimer = TURN_TICKS;
   world.resolveTimer = 0;
   world.moveBudget = WALK_BUDGET;
+  spawnCrate(world); // a supply drop each turn (capped at MAX_CRATES on the map)
+}
+
+/** Drop a supply crate at a random column (if the map isn't already full).
+ *  ~40% are health crates; the rest grant a random finite-ammo weapon. */
+function spawnCrate(world: WorldState): void {
+  if (world.crates.length >= MAX_CRATES) return;
+  const margin = 60;
+  const rx = nextRandom(world.rng);
+  world.rng = rx.next;
+  const x = margin + rx.value * (world.width - 2 * margin);
+  const rk = nextRandom(world.rng);
+  world.rng = rk.next;
+  if (rk.value < 0.4) {
+    world.crates.push({ x, y: -CRATE_SIZE, kind: 'health', weapon: -1, amount: CRATE_HEALTH, landed: false });
+    return;
+  }
+  const rw = nextRandom(world.rng);
+  world.rng = rw.next;
+  const weapon = 1 + Math.floor(rw.value * (WEAPON_ORDER.length - 1)); // indices 1..5 (finite ammo)
+  world.crates.push({ x, y: -CRATE_SIZE, kind: 'weapon', weapon, amount: CRATE_AMMO, landed: false });
 }
 
 function fire(world: WorldState, power: number): void {
@@ -575,6 +624,50 @@ function updateSubMunitions(world: WorldState): void {
       world.subMunitions.splice(i, 1);
     }
   }
+}
+
+/** Settle crates onto the terrain (parachute down, re-fall if the ground under
+ *  them is destroyed) and let any living ape collect one on contact.
+ *  `columnSurface` is only consulted on the landing transition; steady-state
+ *  support is a cheap O(1) probe so crates don't dominate the replay cycle budget. */
+function updateCrates(world: WorldState): void {
+  const half = CRATE_SIZE / 2;
+  for (let i = world.crates.length - 1; i >= 0; i--) {
+    const c = world.crates[i];
+    if (!c.landed) {
+      c.y += CRATE_FALL_SPEED * FIXED_DT;
+      if (isSolid(world.mask, c.x, c.y + half + 1)) {
+        const surface = columnSurface(world.mask, c.x);
+        c.y = (surface ?? world.height + 999) - half; // snap onto the surface
+        c.landed = true;
+      }
+    } else if (!isSolid(world.mask, c.x, c.y + half + 1)) {
+      c.landed = false; // ground destroyed beneath it: fall again
+    }
+    if (c.y > world.height + 50) {
+      world.crates.splice(i, 1); // fell out of the world
+      continue;
+    }
+    for (const ape of world.apes) {
+      if (!alive(ape, world.height)) continue;
+      const dx = ape.x - c.x;
+      const dy = ape.y - c.y;
+      if (dx * dx + dy * dy <= CRATE_COLLECT_DIST * CRATE_COLLECT_DIST) {
+        collectCrate(world, ape, c);
+        world.crates.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+function collectCrate(world: WorldState, ape: ApeState, c: Crate): void {
+  if (c.kind === 'health') {
+    ape.health = Math.min(APE_MAX_HEALTH, ape.health + c.amount);
+  } else if (world.ammo[ape.team][c.weapon] >= 0) {
+    world.ammo[ape.team][c.weapon] += c.amount;
+  }
+  world.events.push({ type: 'crate', x: c.x, y: c.y, kind: c.kind });
 }
 
 /** Bridge: relocate the firing ape to the impact column, standing on the surface

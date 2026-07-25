@@ -15,6 +15,7 @@ import { downloadJson } from '../util/download';
 import { WEAPON_ORDER, weaponAt } from '../weapons/weaponData';
 import { WeaponWheel, slotFromAngle } from '../render/WeaponWheel';
 import { HazardRenderer } from '../render/HazardRenderer';
+import { CrateRenderer } from '../render/CrateRenderer';
 
 // Terrain variant counts (public/sprites/manifest.json terrainSet entries).
 const TERRAIN_DIRT_COUNT = 13;
@@ -95,6 +96,7 @@ export class GameScene extends Phaser.Scene {
   private hud!: Phaser.GameObjects.Text;
   private wheel!: WeaponWheel;
   private hazards!: HazardRenderer;
+  private crates!: CrateRenderer;
   private wheelKey!: Phaser.Input.Keyboard.Key;
   private numberKeys!: Phaser.Input.Keyboard.Key[];
   private pendingSelect: number | undefined;
@@ -177,6 +179,7 @@ export class GameScene extends Phaser.Scene {
     this.add.image(0, 0, this.terrain.textureKey).setOrigin(0, 0);
     this.scatterCrystals(); // decor: drawn above terrain, below the apes added later
     this.hazards = new HazardRenderer(this); // gas clouds / mines / sub-munitions
+    this.crates = new CrateRenderer(this);   // supply crates
 
     this.anims.create({
       key: 'explode',
@@ -378,6 +381,8 @@ export class GameScene extends Phaser.Scene {
         boom.play('explode');
         boom.once('animationcomplete', () => boom.destroy());
         this.spawnSmoke(ev.x, ev.y); // lingering smoke where the blast hit
+      } else if (ev.type === 'crate') {
+        this.crates.spawnPickup(ev.x, ev.y, ev.kind);
       }
     }
   }
@@ -504,8 +509,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.hadShot = !!w.shot;
 
-    // Sync gas clouds / mines / sub-munitions with the sim (render-only).
+    // Sync gas clouds / mines / sub-munitions / crates with the sim (render-only).
     this.hazards.render(w);
+    this.crates.render(w);
 
     this.powerBar.width = w.aim.power * POWER_BAR_WIDTH;
     this.aimLine.setVisible(showMarker);
