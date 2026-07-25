@@ -127,7 +127,7 @@ pub fn weapon_at(i: usize) -> WeaponDef {
             damage: 10.0,
             launch_speed: 500.0,
             ammo_start: 1,
-            placeholder: true,
+            placeholder: false,
         },
         _ => panic!("weapon index {i} out of range [0, {WEAPON_COUNT})"),
     }

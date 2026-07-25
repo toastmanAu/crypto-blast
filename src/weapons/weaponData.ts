@@ -40,7 +40,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
   bridge: {
     id: 'bridge', name: 'Bridge',
     projectile: { mass: 4, gravityScale: 1, drag: 0.04, windSusceptibility: 1 / 4 },
-    blastRadius: 20, damage: 10, launchSpeed: 500, ammoStart: 1, placeholder: true,
+    blastRadius: 20, damage: 10, launchSpeed: 500, ammoStart: 1,
   },
 };
 

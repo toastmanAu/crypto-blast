@@ -29,8 +29,8 @@ describe('weapon data', () => {
     }
   });
 
-  it('bridge is a flagged placeholder', () => {
+  it('bridge is implemented (no longer a placeholder)', () => {
     expect(weaponAt(5).id).toBe('bridge');
-    expect(weaponAt(5).placeholder).toBe(true);
+    expect(weaponAt(5).placeholder).toBeFalsy();
   });
 });
