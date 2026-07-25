@@ -63,6 +63,11 @@ export const CRATE_FALL_SPEED = 70;   // px/s parachute descent
 export const CRATE_HEALTH = 25;       // HP restored by a health crate
 export const CRATE_AMMO = 1;          // rounds added by a weapon crate
 export const CRATE_COLLECT_DIST = 28; // px contact radius to collect a crate
+// Sudden death: after SUDDEN_DEATH_TURN turns the water rises each turn and apes
+// standing in it drown — a tiebreaker so matches can't stall forever.
+export const SUDDEN_DEATH_TURN = 30;   // turn count at which flooding begins
+export const WATER_RISE_PER_TURN = 40; // px the waterline climbs per turn once active
+export const DROWN_DAMAGE_PER_TICK = 20; // HP/s a submerged ape loses (per fixed tick)
 const SUB_GRAVITY = 800; // px/s^2 on sub-munitions
 const GROUND_FRICTION = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON = 1; // |velX| below this snaps to 0 (lets the world reach rest)
@@ -151,6 +156,8 @@ export interface WorldState {
   phase: Phase;
   turnTimer: number;     // ticks left in AIMING
   resolveTimer: number;  // ticks elapsed in RESOLVING (spiral guard)
+  turn: number;          // completed turn count (drives sudden death)
+  waterLevel: number;    // y of the waterline (starts at height; rises in sudden death)
   moveBudget: number;    // px of movement left this turn (walk drains it, jump costs a chunk)
   teamNext: [number, number]; // next roster position to act, per team
   winner: number | null; // team index, -1 draw, null ongoing
@@ -225,6 +232,8 @@ export function createWorld(seed: number, width: number, height: number): WorldS
     phase: 'AIMING',
     turnTimer: TURN_TICKS,
     resolveTimer: 0,
+    turn: 0,
+    waterLevel: height,       // waterline at the very bottom until sudden death
     moveBudget: WALK_BUDGET,
     teamNext: [1, 0],        // team 0 already acting at pos 0; next is pos 1
     winner: null,
@@ -323,6 +332,7 @@ export function stepWorld(world: WorldState, input: TickInput): void {
   updateMines(world);
   updateSubMunitions(world);
   updateCrates(world);
+  applyDrowning(world);
 
   if (world.phase === 'RESOLVING') {
     world.resolveTimer++;
@@ -361,6 +371,10 @@ function endTurn(world: WorldState): void {
     world.winner = a0 === 0 && a1 === 0 ? -1 : a0 === 0 ? 1 : 0;
     world.phase = 'GAMEOVER';
     return;
+  }
+  world.turn++;
+  if (world.turn >= SUDDEN_DEATH_TURN) {
+    world.waterLevel = Math.max(0, world.waterLevel - WATER_RISE_PER_TURN);
   }
   const nextTeam = 1 - world.apes[world.activeApe].team;
   world.activeApe = nextLivingApeOnTeam(world, nextTeam);
@@ -668,6 +682,17 @@ function collectCrate(world: WorldState, ape: ApeState, c: Crate): void {
     world.ammo[ape.team][c.weapon] += c.amount;
   }
   world.events.push({ type: 'crate', x: c.x, y: c.y, kind: c.kind });
+}
+
+/** Sudden death: any living ape standing below the waterline drowns. */
+function applyDrowning(world: WorldState): void {
+  if (world.waterLevel >= world.height) return; // no flooding yet
+  for (const ape of world.apes) {
+    if (!alive(ape, world.height)) continue;
+    if (ape.y + APE_HEIGHT / 2 > world.waterLevel) {
+      ape.health -= DROWN_DAMAGE_PER_TICK;
+    }
+  }
 }
 
 /** Bridge: relocate the firing ape to the impact column, standing on the surface

@@ -81,6 +81,8 @@ export function serializeWorld(world: WorldState): Uint8Array {
   w.u32(world.activeApe);
   w.u32(world.turnTimer);
   w.u32(world.resolveTimer);
+  w.u32(world.turn);
+  w.f(world.waterLevel);
   w.f(world.moveBudget);
   w.u32(world.winner ?? 99);
   w.u32(world.teamNext[0]);

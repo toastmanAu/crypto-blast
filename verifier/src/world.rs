@@ -68,6 +68,11 @@ const CRATE_FALL_SPEED: f64 = 70.0; // px/s parachute descent
 const CRATE_HEALTH: i64 = 25; // HP restored by a health crate
 const CRATE_AMMO: i64 = 1; // rounds added by a weapon crate
 const CRATE_COLLECT_DIST: f64 = 28.0; // px contact radius to collect a crate
+// Sudden death: after SUDDEN_DEATH_TURN turns the water rises each turn and apes
+// standing in it drown — a tiebreaker so matches can't stall forever.
+const SUDDEN_DEATH_TURN: i64 = 30; // turn count at which flooding begins
+const WATER_RISE_PER_TURN: f64 = 40.0; // px the waterline climbs per turn once active
+const DROWN_DAMAGE_PER_TICK: f64 = 20.0; // HP a submerged ape loses per fixed tick
 const SUB_GRAVITY: f64 = 800.0; // px/s^2 on sub-munitions
 const GROUND_FRICTION: f64 = 0.7; // grounded horizontal velocity decay per tick
 const REST_EPSILON: f64 = 1.0; // |velX| below this snaps to 0
@@ -197,6 +202,11 @@ pub struct WorldState {
     pub turn_timer: i64,
     #[cfg_attr(feature = "std", serde(rename = "resolveTimer"))]
     pub resolve_timer: i64,
+    /// Completed turn count (drives sudden death).
+    pub turn: i64,
+    /// y of the waterline (starts at height; rises in sudden death).
+    #[cfg_attr(feature = "std", serde(rename = "waterLevel"))]
+    pub water_level: f64,
     /// Px of movement left this turn (walk drains it, a jump costs a chunk).
     #[cfg_attr(feature = "std", serde(rename = "moveBudget"))]
     pub move_budget: f64,
@@ -273,6 +283,8 @@ pub fn serialize_world(world: &WorldState) -> Vec<u8> {
     w.u32(world.active_ape);
     w.u32(world.turn_timer);
     w.u32(world.resolve_timer);
+    w.u32(world.turn);
+    w.f(world.water_level);
     w.f(world.move_budget);
     w.u32(world.winner.unwrap_or(99));
     w.u32(world.team_next[0]);
@@ -406,6 +418,8 @@ pub fn create_world(seed: i32, width: i32, height: i32) -> WorldState {
         active_ape: 0,
         turn_timer: TURN_TICKS,
         resolve_timer: 0,
+        turn: 0,
+        water_level: height as f64, // waterline at the very bottom until sudden death
         move_budget: WALK_BUDGET,
         winner: None,
         team_next: [1, 0],
@@ -583,6 +597,7 @@ pub fn step_world(world: &mut WorldState, input: &TickInput) {
     update_mines(world);
     update_sub_munitions(world);
     update_crates(world);
+    apply_drowning(world);
 
     if world.phase == "RESOLVING" {
         world.resolve_timer += 1;
@@ -644,6 +659,10 @@ fn end_turn(world: &mut WorldState) {
         });
         world.phase = "GAMEOVER".to_string();
         return;
+    }
+    world.turn += 1;
+    if world.turn >= SUDDEN_DEATH_TURN {
+        world.water_level = f64::max(0.0, world.water_level - WATER_RISE_PER_TURN);
     }
     let next_team = 1 - world.apes[world.active_ape as usize].team;
     world.active_ape = next_living_ape_on_team(world, next_team);
@@ -1106,6 +1125,23 @@ fn collect_crate(world: &mut WorldState, ape_idx: usize, crate_idx: usize) {
         }
     }
     world.crates.remove(crate_idx);
+}
+
+/// Sudden death: any living ape standing below the waterline drowns.
+/// Ported from `applyDrowning` in `src/sim/World.ts`.
+fn apply_drowning(world: &mut WorldState) {
+    let height = world.mask.height as f64;
+    if world.water_level >= height {
+        return; // no flooding yet
+    }
+    for ape in world.apes.iter_mut() {
+        if !alive(ape, height) {
+            continue;
+        }
+        if ape.y + APE_HEIGHT / 2.0 > world.water_level {
+            ape.health -= DROWN_DAMAGE_PER_TICK;
+        }
+    }
 }
 
 /// Bridge: relocate the firing ape to the impact column, standing on the surface
