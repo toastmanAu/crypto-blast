@@ -1,0 +1,17 @@
+{
+  "network": "testnet",
+  "rpcUrl": "https://testnet.ckb.dev/rpc",
+  "deployedAt": "2026-07-26",
+  "verifierLock": {
+    "codeHash": "0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305",
+    "hashType": "type",
+    "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/verifier-lock"
+  },
+  "deployerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvrg5w9lw4xww4ep2v7ckqtn27dhmnzwcc6us7tq",
+  "features": "movement (walk/jump/step-climb/budget), 5 munitions (bridge/gas/mine/cluster/seed), supply crates, sudden death",
+  "lockScriptTemplate": {
+    "code_hash": "0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305",
+    "hash_type": "type",
+    "args": "<seed (32 bytes) ‖ commitment (32 bytes)>"
+  }
+}
