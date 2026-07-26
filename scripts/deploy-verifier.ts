@@ -9,16 +9,19 @@
  *   { code_hash: <printed value>, hash_type: "type", args: <seed‖commitment> }
  *
  * PREREQUISITES
- *   export CKB_PRIVKEY=<your 64-hex-char secp256k1 private key>
+ *   Your deploy key must be in the ckb-cli keystore:
+ *     ckb-cli account import --privkey-path <path-to-64-hex-key>
+ *   export CKB_FROM_ADDRESS=<the testnet address matching that keystore account>
  *   export CKB_RPC_URL=https://testnet.ckb.dev/rpc   (or your node)
  *   ckb-cli >= 2.0.0 must be on PATH (found at ~/.local/bin/ckb-cli)
+ *   gen-txs signs via --sign-now and prompts for the keystore password.
  *
  * DO NOT RUN IN CI — broadcast is intentional, manual-only.
  * See docs/VERIFIER_DEPLOY.md for the full runbook.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -39,12 +42,6 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function requireEnv(name: string): string {
-  const val = process.env[name];
-  if (!val) fail(`Environment variable ${name} is required but not set.`);
-  return val;
-}
-
 /** Run ckb-cli, streaming stdout/stderr to the terminal. Returns exit code. */
 function ckbCli(args: string[]): number {
   const result = spawnSync('ckb-cli', args, {
@@ -55,6 +52,19 @@ function ckbCli(args: string[]): number {
   return result.status ?? 1;
 }
 
+/** Decode a ckb2021 address to its lock args (blake160) via ckb-cli. */
+function lockArgFromAddress(address: string): string {
+  const result = spawnSync(
+    'ckb-cli',
+    ['util', 'key-info', '--address', address, '--output-format', 'yaml'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  const out = (result.stdout ?? '') + (result.stderr ?? '');
+  const m = out.match(/lock_arg:\s*(0x[0-9a-fA-F]+)/);
+  if (!m) fail(`Could not derive lock_arg from address ${address}:\n${out}`);
+  return m[1];
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main(): void {
@@ -63,14 +73,14 @@ function main(): void {
     fail('Refusing to deploy in CI environment (CI=true). Run manually.');
   }
 
-  // Check prerequisites.
-  const privKey = requireEnv('CKB_PRIVKEY');
+  // Check prerequisites. ckb-cli 2.0 signs with the keystore account matching
+  // CKB_FROM_ADDRESS (--sign-now), so no raw private key is needed here.
   const rpcUrl = process.env['CKB_RPC_URL'] ?? 'https://testnet.ckb.dev/rpc';
   const fromAddress = process.env['CKB_FROM_ADDRESS'];
   if (!fromAddress) {
     fail(
-      'CKB_FROM_ADDRESS must be set to the testnet address matching CKB_PRIVKEY.\n' +
-        "Derive it with: ckb-cli util key-info --privkey-path <(echo $CKB_PRIVKEY)",
+      'CKB_FROM_ADDRESS must be set to the testnet address whose key is in your ckb-cli keystore.\n' +
+        'Derive it from your key with: ckb-cli util key-info --privkey-path <path-to-key>',
     );
   }
 
@@ -97,6 +107,7 @@ function main(): void {
   mkdirSync(migrationDir, { recursive: true });
 
   // Write a minimal deployment config enabling Type-ID.
+  const lockArgs = lockArgFromAddress(fromAddress);
   const deployConfig = `
 # Crypto Blast verifier-lock deployment config.
 # enable_type_id = true → ckb-cli creates/updates the Type-ID type script.
@@ -104,37 +115,33 @@ function main(): void {
 name = "${CELL_NAME}"
 enable_type_id = true
 location = { file = "${BINARY_PATH}" }
+
+# Lock script controlling the deployed cell (your secp256k1_blake160 lock).
+[lock]
+code_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+hash_type = "type"
+args = "${lockArgs}"
 `;
   writeFileSync(configPath, deployConfig.trimStart());
   console.log(`\nDeployment config: ${configPath}`);
 
-  // Write the private key to a 0600 temp file so ckb-cli can read it
-  // without it ever appearing on the terminal or in a pipe.
-  const privkeyFile = join(workDir, 'privkey.hex');
-  let genStatus: number;
-  try {
-    writeFileSync(privkeyFile, privKey, { encoding: 'utf8' });
-    chmodSync(privkeyFile, 0o600);
-
-    // Step 1: Generate unsigned deploy transactions.
-    console.log('\n[1/3] Generating deploy transactions (ckb-cli deploy gen-txs)...');
-    genStatus = ckbCli([
-      '--output-format', 'json',
-      'deploy',
-      'gen-txs',
-      '--deployment-config', configPath,
-      '--migration-dir', migrationDir,
-      '--info-file', infoFile,
-      '--from-address', fromAddress,
-      '--fee-rate', '1200',
-      '--sign-now',
-      '--privkey-path', privkeyFile,
-      '--api-uri', rpcUrl,
-    ]);
-  } finally {
-    // Always delete the key file, even if gen-txs throws or fails.
-    try { unlinkSync(privkeyFile); } catch { /* already gone */ }
-  }
+  // ckb-cli 2.0 signs via the keystore account matching --from-address using
+  // --sign-now (it prompts for that account's keystore password on the terminal,
+  // which ckbCli inherits). No raw private key is passed on the command line.
+  // Step 1: Generate + sign the deploy transactions.
+  console.log('\n[1/3] Generating + signing deploy transactions (ckb-cli deploy gen-txs --sign-now)...');
+  const genStatus = ckbCli([
+    '--output-format', 'json',
+    '--url', rpcUrl,
+    'deploy',
+    'gen-txs',
+    '--deployment-config', configPath,
+    '--migration-dir', migrationDir,
+    '--info-file', infoFile,
+    '--from-address', fromAddress,
+    '--fee-rate', '1200',
+    '--sign-now',
+  ]);
 
   if (genStatus !== 0) {
     fail(`gen-txs failed with exit code ${genStatus}`);
@@ -143,11 +150,11 @@ location = { file = "${BINARY_PATH}" }
   // Step 2: Apply (broadcast) the signed transactions.
   console.log('\n[2/3] Broadcasting (ckb-cli deploy apply-txs)...');
   const applyStatus = ckbCli([
+    '--url', rpcUrl,
     'deploy',
     'apply-txs',
     '--migration-dir', migrationDir,
     '--info-file', infoFile,
-    '--api-uri', rpcUrl,
   ]);
 
   if (applyStatus !== 0) {

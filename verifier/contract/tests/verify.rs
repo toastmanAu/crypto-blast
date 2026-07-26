@@ -68,11 +68,29 @@ fn demo() -> (i32, Vec<u8>, Vec<u8>) {
     (1234, c, tape)
 }
 
+/// The movement fixture: seed 1234, a tape with walk + jump, and its golden
+/// commitment (produced by the TS `commitWorld` and pinned in tests/tape-move.hash).
+fn move_tape() -> (i32, Vec<u8>, Vec<u8>) {
+    let tape = std::fs::read("../tests/tape-move.bin").expect("tape-move.bin");
+    let hash = std::fs::read_to_string("../tests/tape-move.hash").expect("tape-move.hash");
+    let c = hex::decode(hash.trim().trim_start_matches("0x")).expect("hex commitment");
+    (1234, c, tape)
+}
+
 #[test]
 fn accepts_valid_tape() {
     let (seed, c, tape) = demo();
     let r = run(seed, &c, &tape);
     assert!(r.is_ok(), "valid tape must unlock, got {:?}", r.err());
+}
+
+#[test]
+fn accepts_movement_tape() {
+    // A tape with walk + jump must replay to the same commitment on-chain —
+    // proof that movement is enforced by the deployed kernel, not just the client.
+    let (seed, c, tape) = move_tape();
+    let r = run(seed, &c, &tape);
+    assert!(r.is_ok(), "movement tape must unlock, got {:?}", r.err());
 }
 
 #[test]
