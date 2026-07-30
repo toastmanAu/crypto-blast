@@ -12,17 +12,17 @@
 //! * **FORFEIT-FINALIZE** (tag=2) — the reveal window timed out with no valid
 //!   advance: the FULL pot is paid to the claimant under the pinned payout lock.
 //!
-//! # `lock.args` (316 bytes — this lock's OWN args, read via `load_script()`)
+//! # `lock.args` (357 bytes — this lock's OWN args, read via `load_script()`)
 //! ```text
 //! [0..32]    escrow_code_hash       ← PIN for ADVANCE's fresh escrow cell
 //! [32]       escrow_hash_type
-//! [33..219]  escrow_args (186)      ← the original escrow lock.args, VERBATIM
-//! [219..239] claimant_id (20)
-//! [239..243] stalled_idx (4 LE)
-//! [243..275] head_k (32)            ← mutually-signed last completed head
-//! [275..307] committed_head (32)    ← zeros when has_commit == 0
-//! [307]      has_commit (1)
-//! [308..316] forfeit_deadline (8 LE)
+//! [33..260]  escrow_args (227)      ← the original escrow lock.args, VERBATIM
+//! [260..280] claimant_id (20)
+//! [280..284] stalled_idx (4 LE)
+//! [284..316] head_k (32)            ← mutually-signed last completed head
+//! [316..348] committed_head (32)    ← zeros when has_commit == 0
+//! [348]      has_commit (1)
+//! [349..357] forfeit_deadline (8 LE)
 //! ```
 //! Within the embedded `escrow_args` (offsets relative to escrow_args start):
 //! `[0..32] payout_code_hash`, `[32] payout_hash_type`, `[33..53] player0_id`,
@@ -131,13 +131,13 @@ mod contract {
     const ID_LEN: usize = 20;
     const CODE_HASH_LEN: usize = 32;
     const HASH_TYPE_LEN: usize = 1;
-    // The original escrow lock.args length (embedded VERBATIM at args[33..219]).
-    const ESCROW_ARGS_LEN: usize = 186;
-    // escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(186) ‖
+    // The original escrow lock.args length (embedded VERBATIM at args[33..260]).
+    const ESCROW_ARGS_LEN: usize = 227;
+    // escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(227) ‖
     //   claimant_id(20) ‖ stalled_idx(4 LE) ‖ head_k(32) ‖ committed_head(32) ‖
-    //   has_commit(1) ‖ forfeit_deadline(8 LE) = 316
+    //   has_commit(1) ‖ forfeit_deadline(8 LE) = 357
     const PENDING_FORFEIT_ARGS_LEN: usize =
-        CODE_HASH_LEN + HASH_TYPE_LEN + ESCROW_ARGS_LEN + ID_LEN + 4 + 32 + 32 + 1 + 8; // 316
+        CODE_HASH_LEN + HASH_TYPE_LEN + ESCROW_ARGS_LEN + ID_LEN + 4 + 32 + 32 + 1 + 8; // 357
 
     fn ckb_blake2b(input: &[u8]) -> [u8; 32] {
         let mut h = Blake2bBuilder::new(32)
@@ -378,15 +378,15 @@ mod contract {
         if args.len() != PENDING_FORFEIT_ARGS_LEN {
             return E_FF_ARGS_LEN;
         }
-        // Layout: escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(186)
+        // Layout: escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(227)
         //   ‖ claimant_id(20) ‖ stalled_idx(4 LE) ‖ head_k(32) ‖ committed_head(32)
         //   ‖ has_commit(1) ‖ forfeit_deadline(8 LE).
         let escrow_code_hash = &args[0..CODE_HASH_LEN];
         let escrow_hash_type = args[CODE_HASH_LEN];
-        let escrow_args = &args[33..219];
-        // claimant_id = args[219..239]; stalled_idx = args[239..243]; head_k =
-        // args[243..275]; committed_head = args[275..307]; has_commit = args[307];
-        // forfeit_deadline = args[308..316] — parsed per-path below.
+        let escrow_args = &args[33..260];
+        // claimant_id = args[260..280]; stalled_idx = args[280..284]; head_k =
+        // args[284..316]; committed_head = args[316..348]; has_commit = args[348];
+        // forfeit_deadline = args[349..357] — parsed per-path below.
 
         let wit = match load_witness_args(0, Source::GroupInput) {
             Ok(w) => w,
@@ -403,17 +403,17 @@ mod contract {
         if tag == 1 {
             // ADVANCE — the stalled player plays the stalled move on-chain.
             let mut si = [0u8; 4];
-            si.copy_from_slice(&args[239..243]);
+            si.copy_from_slice(&args[280..284]);
             let stalled_idx = u32::from_le_bytes(si);
-            let head_k: [u8; 32] = match args[243..275].try_into() {
+            let head_k: [u8; 32] = match args[284..316].try_into() {
                 Ok(h) => h,
                 Err(_) => return E_FF_ARGS_LEN,
             };
-            let committed_head: [u8; 32] = match args[275..307].try_into() {
+            let committed_head: [u8; 32] = match args[316..348].try_into() {
                 Ok(h) => h,
                 Err(_) => return E_FF_ARGS_LEN,
             };
-            let has_commit = args[307];
+            let has_commit = args[348];
             return advance(
                 &lock,
                 escrow_code_hash,
@@ -428,11 +428,11 @@ mod contract {
         if tag == 2 {
             // FORFEIT-FINALIZE — timeout, full pot to the claimant. Payout pin is
             // embedded in escrow_args[0..33]; claimant + deadline from the tail.
-            let claimant_id = &args[219..239];
+            let claimant_id = &args[260..280];
             let payout_code_hash = &escrow_args[0..CODE_HASH_LEN];
             let payout_hash_type = escrow_args[CODE_HASH_LEN];
             let mut d = [0u8; 8];
-            d.copy_from_slice(&args[308..316]);
+            d.copy_from_slice(&args[349..357]);
             let forfeit_deadline = u64::from_le_bytes(d);
             return forfeit_finalize(
                 claimant_id,

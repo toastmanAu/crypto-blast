@@ -27,8 +27,9 @@ use ckb_testtool::{
 };
 use k256::ecdsa::SigningKey;
 use verifier::{
-    court_chain_genesis, court_chain_step, create_world, decode_court_envelope, decode_tape,
-    derive_seed, encode_court_envelope, step_world,
+    claim_commitment, court_chain_genesis, court_chain_step, create_world, decode_court_envelope,
+    decode_tape, derive_seed, encode_claim_args, encode_court_envelope, encode_final_turn_record,
+    step_world, ClaimArgs, FinalTurnRecord,
 };
 
 const ESCROW_BIN: &str = "target/riscv64imac-unknown-none-elf/release/escrow-lock";
@@ -59,10 +60,25 @@ const FORFEIT_LOCK_CODE: &[u8] = b"crypto-blast-forfeit-lock";
 /// forfeit_deadline = claim_since + REVEAL_WINDOW.
 const REVEAL_WINDOW: u64 = 100;
 
+/// The funder-set challenge window embedded in the escrow args (args[186..194]).
+/// challenge_deadline = claim_since + CHALLENGE_WINDOW.
+const CHALLENGE_WINDOW: u64 = 200;
+
+/// The dummy claim-lock code. Like the forfeit lock, its body is irrelevant
+/// (output locks never execute); only its IDENTITY is pinned in the escrow args
+/// (args[194..227]) and checked against the pending-claim output cell's lock.
+const CLAIM_LOCK_CODE: &[u8] = b"crypto-blast-claim-lock";
+
 /// The pinned forfeit-lock identity (code_hash, hash_type byte) that the
 /// pending-forfeit output cell uses and that gets embedded in the escrow args.
 fn forfeit_lock_identity() -> ([u8; 32], u8) {
     (verifier::ckbhash(FORFEIT_LOCK_CODE), HASH_TYPE_DATA1)
+}
+
+/// The pinned claim-lock identity (code_hash, hash_type byte) that the
+/// pending-claim output cell uses and that gets embedded in the escrow args.
+fn claim_lock_identity() -> ([u8; 32], u8) {
+    (verifier::ckbhash(CLAIM_LOCK_CODE), HASH_TYPE_DATA1)
 }
 
 /// The two revealing nonces. `nonce0` is the brute-forced counter (LE) whose
@@ -87,15 +103,17 @@ fn court_envelope() -> Vec<u8> {
     std::fs::read("../tests/fixture-court.bin").expect("fixture-court.bin")
 }
 
-/// Build the 186-byte escrow args:
+/// Build the 227-byte escrow args:
 /// `payout_code_hash(32) ‖ payout_hash_type(1) ‖ p0(20) ‖ p1(20)
 ///  ‖ c0(32) ‖ c1(32) ‖ deadline(8) ‖ reveal_window(8)
-///  ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)`.
-/// The happy/court/refund paths ignore the trailing reveal_window + forfeit pin.
+///  ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)
+///  ‖ challenge_window(8) ‖ claim_lock_code_hash(32) ‖ claim_lock_hash_type(1)`.
+/// The happy/refund paths ignore everything after the deadline.
 fn build_args(p0: &[u8; 20], p1: &[u8; 20], c0: &[u8; 32], c1: &[u8; 32]) -> Vec<u8> {
     let (payout_code_hash, payout_hash_type) = payout_lock_identity();
     let (forfeit_code_hash, forfeit_hash_type) = forfeit_lock_identity();
-    let mut a = Vec::with_capacity(186);
+    let (claim_code_hash, claim_hash_type) = claim_lock_identity();
+    let mut a = Vec::with_capacity(227);
     a.extend_from_slice(&payout_code_hash);
     a.push(payout_hash_type);
     a.extend_from_slice(p0);
@@ -106,7 +124,10 @@ fn build_args(p0: &[u8; 20], p1: &[u8; 20], c0: &[u8; 32], c1: &[u8; 32]) -> Vec
     a.extend_from_slice(&REVEAL_WINDOW.to_le_bytes()); // reveal_window (forfeit path)
     a.extend_from_slice(&forfeit_code_hash); // forfeit-lock PIN (forfeit path)
     a.push(forfeit_hash_type);
-    assert_eq!(a.len(), 186, "escrow args must be 186 bytes");
+    a.extend_from_slice(&CHALLENGE_WINDOW.to_le_bytes()); // challenge_window (court path)
+    a.extend_from_slice(&claim_code_hash); // claim-lock PIN (court path)
+    a.push(claim_hash_type);
+    assert_eq!(a.len(), 227, "escrow args must be 227 bytes");
     a
 }
 
@@ -130,6 +151,98 @@ fn replay_winner(seed: i32, env: &[u8]) -> i64 {
         }
     }
     w.winner.expect("fixture match must reach a winner")
+}
+
+/// Replay the match and extract the final-turn record for the challenge window.
+/// Returns `(winner, FinalTurnRecord)`.
+fn replay_final_turn_record(
+    seed: i32,
+    env: &[u8],
+    p0: &[u8; 20],
+    p1: &[u8; 20],
+) -> (i64, FinalTurnRecord) {
+    let e = decode_court_envelope(env).expect("decode_court_envelope");
+    let mut w = create_world(seed, 1280, 720);
+    let mut head = court_chain_genesis(seed);
+    let mut final_prior_head = head;
+    let mut final_idx: u32 = 0;
+    let mut final_actor_team: i64 = 0;
+    for (i, tape) in e.tapes.iter().enumerate() {
+        let active_team = w.apes[w.active_ape as usize].team;
+        final_prior_head = head;
+        final_idx = i as u32;
+        final_actor_team = active_team;
+        head = court_chain_step(&head, i as u32, tape);
+        for input in decode_tape(tape) {
+            step_world(&mut w, &input);
+        }
+    }
+    let winner = w.winner.expect("fixture match must reach a winner");
+    let final_actor_id = if final_actor_team == 0 { *p0 } else { *p1 };
+    (winner, FinalTurnRecord {
+        final_actor_id,
+        final_prior_head,
+        final_idx,
+        final_claimed_head: head,
+    })
+}
+
+/// Build the pending-claim output lock: the pinned claim-lock identity with
+/// the 114-byte ClaimArgs as args.
+fn pending_claim_lock(claim_args: &ClaimArgs) -> Script {
+    let (code_hash, _) = claim_lock_identity();
+    Script::new_builder()
+        .code_hash(code_hash.pack())
+        .hash_type(ScriptHashType::Data1)
+        .args(Bytes::from(encode_claim_args(claim_args).to_vec()).pack())
+        .build()
+}
+
+/// The since value used for court-claim tests (absolute block number).
+const CLAIM_SINCE: u64 = 1000;
+
+/// Assemble + verify a court-path spend that transitions to a pending-claim
+/// cell. The output carries the claim-lock + ClaimArgs + FinalTurnRecord data.
+fn run_court_claim(
+    args: Vec<u8>,
+    witness_lock: Vec<u8>,
+    claim_args: &ClaimArgs,
+    record: &FinalTurnRecord,
+) -> Result<u64, ckb_testtool::ckb_error::Error> {
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(ESCROW_BIN)
+        .expect("escrow-lock binary missing — build it for riscv64imac-unknown-none-elf first")
+        .into();
+    let escrow_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&escrow_out, Bytes::from(args))
+        .expect("build escrow lock");
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+    let since_packed: Uint64 = CLAIM_SINCE.pack();
+    let input = CellInput::new_builder()
+        .since(since_packed)
+        .previous_output(input_cell)
+        .build();
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(witness_lock)).pack())
+        .build();
+    let claim_lock = pending_claim_lock(claim_args);
+    let record_data = encode_final_turn_record(record);
+    let tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack())
+        .output(
+            CellOutput::new_builder()
+                .capacity(POT)
+                .lock(claim_lock)
+                .build(),
+        )
+        .output_data(Bytes::from(record_data.to_vec()).pack());
+    let tx = ctx.complete_tx(tb.build());
+    ctx.verify_tx(&tx, 200_000_000).map(|c| c as u64)
 }
 
 /// Build the canonical PINNED payout lock for `id`: the code_hash + hash_type
@@ -222,21 +335,35 @@ fn valid_setup() -> (Vec<u8>, Vec<u8>, [u8; 20], [u8; 20], i64) {
 
 #[test]
 fn accepts_court_valid() {
-    let (args, wit, p0, p1, winner) = valid_setup();
-    // Pay the full pot to the replayed winner's id.
-    let winner_id = match winner {
-        0 => p0.to_vec(),
-        1 => p1.to_vec(),
-        _ => panic!("expected a decisive winner in the fixture, got {winner}"),
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let seed = derive_seed(&n0, &n1);
+    assert_eq!(seed, 1234, "nonces must derive the fixture seed");
+    let (winner, record) = replay_final_turn_record(seed, &env, &p0, &p1);
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &env);
+    let (payout_code_hash, payout_hash_type) = payout_lock_identity();
+    let commitment = claim_commitment(&record);
+    let claim_args = ClaimArgs {
+        payout_code_hash,
+        payout_hash_type,
+        player0_id: p0,
+        player1_id: p1,
+        asserted_winner: winner as i8,
+        challenge_deadline_block: CLAIM_SINCE + CHALLENGE_WINDOW,
+        claim_commitment: commitment,
     };
-    let r = run(args, wit, &[(winner_id, POT)]);
+    let r = run_court_claim(args, wit, &claim_args, &record);
     assert!(
         r.is_ok(),
-        "valid court spend must unlock, got {:?}",
+        "valid court claim must unlock, got {:?}",
         r.err()
     );
     if let Ok(cycles) = r {
-        eprintln!("court-path cycles: {cycles}");
+        eprintln!("court-claim cycles: {cycles}");
     }
 }
 
@@ -268,12 +395,31 @@ fn rejects_wrong_seed() {
 }
 
 #[test]
-fn rejects_payout_to_loser() {
-    let (args, wit, p0, _p1, winner) = valid_setup();
-    assert_eq!(winner, 1, "fixture winner is team 1");
-    // Pay the full pot to the LOSER (player0) → must reject.
-    let r = run(args, wit, &[(p0.to_vec(), POT)]);
-    assert!(r.is_err(), "paying the loser must reject");
+fn rejects_claim_wrong_winner() {
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let seed = derive_seed(&n0, &n1);
+    let (winner, record) = replay_final_turn_record(seed, &env, &p0, &p1);
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &env);
+    let (payout_code_hash, payout_hash_type) = payout_lock_identity();
+    let commitment = claim_commitment(&record);
+    // Assert the WRONG winner (flip 0↔1).
+    let wrong_winner = if winner == 0 { 1 } else { 0 };
+    let claim_args = ClaimArgs {
+        payout_code_hash,
+        payout_hash_type,
+        player0_id: p0,
+        player1_id: p1,
+        asserted_winner: wrong_winner as i8,
+        challenge_deadline_block: CLAIM_SINCE + CHALLENGE_WINDOW,
+        claim_commitment: commitment,
+    };
+    let r = run_court_claim(args, wit, &claim_args, &record);
+    assert!(r.is_err(), "claim with wrong asserted_winner must reject");
 }
 
 /// CRITICAL prize-theft regression: a losing player submits the court spend and
@@ -317,7 +463,7 @@ fn sign_recoverable(key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
     out
 }
 
-/// 186-byte escrow args with an explicit `deadline_block` (refund path reads it;
+/// 227-byte escrow args with an explicit `deadline_block` (refund path reads it;
 /// happy/court ignore it). Commits are zero — happy/refund don't use them.
 fn build_args_deadline(
     p0: &[u8; 20],
@@ -328,14 +474,18 @@ fn build_args_deadline(
 ) -> Vec<u8> {
     let mut a = build_args(p0, p1, c0, c1);
     // Overwrite the 8-byte deadline at [137..145] (build_args wrote 0), then
-    // re-append reveal_window + forfeit pin so the args stay 186 bytes.
+    // re-append the tail so the args stay 227 bytes.
     a.truncate(137);
     a.extend_from_slice(&deadline.to_le_bytes());
     let (forfeit_code_hash, forfeit_hash_type) = forfeit_lock_identity();
+    let (claim_code_hash, claim_hash_type) = claim_lock_identity();
     a.extend_from_slice(&REVEAL_WINDOW.to_le_bytes());
     a.extend_from_slice(&forfeit_code_hash);
     a.push(forfeit_hash_type);
-    assert_eq!(a.len(), 186);
+    a.extend_from_slice(&CHALLENGE_WINDOW.to_le_bytes());
+    a.extend_from_slice(&claim_code_hash);
+    a.push(claim_hash_type);
+    assert_eq!(a.len(), 227);
     a
 }
 
@@ -523,23 +673,70 @@ fn rejects_refund_before_deadline() {
 }
 
 #[test]
-fn rejects_payout_to_winner_args_wrong_lock() {
-    let (args, wit, _p0, p1, winner) = valid_setup();
-    assert_eq!(winner, 1, "fixture winner is team 1");
-
-    // Correct winner ARGS, but an attacker-controlled lock SCRIPT (different
-    // code_hash from the pinned payout lock). hash_type is also Data1 to prove
-    // the rejection is driven by the code_hash mismatch, not hash_type.
-    let attacker_lock = Script::new_builder()
-        .code_hash([0xFFu8; 32].pack()) // NOT verifier::ckbhash(RECIPIENT_LOCK_CODE)
-        .hash_type(ScriptHashType::Data1)
-        .args(Bytes::from(p1.to_vec()).pack())
+fn rejects_claim_wrong_lock() {
+    let (p0, p1) = player_ids();
+    let (n0, n1) = nonces();
+    let c0 = verifier::ckbhash(&n0);
+    let c1 = verifier::ckbhash(&n1);
+    let env = court_envelope();
+    let seed = derive_seed(&n0, &n1);
+    let (winner, record) = replay_final_turn_record(seed, &env, &p0, &p1);
+    let args = build_args(&p0, &p1, &c0, &c1);
+    let wit = court_witness(&n0, &n1, &env);
+    let (payout_code_hash, payout_hash_type) = payout_lock_identity();
+    let commitment = claim_commitment(&record);
+    let claim_args = ClaimArgs {
+        payout_code_hash,
+        payout_hash_type,
+        player0_id: p0,
+        player1_id: p1,
+        asserted_winner: winner as i8,
+        challenge_deadline_block: CLAIM_SINCE + CHALLENGE_WINDOW,
+        claim_commitment: commitment,
+    };
+    // Build the output with an attacker-controlled lock code_hash.
+    let mut ctx = Context::default();
+    let bin: Bytes = std::fs::read(ESCROW_BIN)
+        .expect("escrow-lock binary")
+        .into();
+    let escrow_out = ctx.deploy_cell(bin);
+    let lock = ctx
+        .build_script(&escrow_out, Bytes::from(args))
+        .expect("build escrow lock");
+    let input_cell = ctx.create_cell(
+        CellOutput::new_builder().capacity(POT).lock(lock).build(),
+        Bytes::new(),
+    );
+    let since_packed: Uint64 = CLAIM_SINCE.pack();
+    let input = CellInput::new_builder()
+        .since(since_packed)
+        .previous_output(input_cell)
         .build();
-
-    let r = run_with_locks(args, wit, &[(attacker_lock, POT)]);
+    let witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(wit)).pack())
+        .build();
+    // Attacker lock: correct args, wrong code_hash.
+    let attacker_lock = Script::new_builder()
+        .code_hash([0xFFu8; 32].pack())
+        .hash_type(ScriptHashType::Data1)
+        .args(Bytes::from(encode_claim_args(&claim_args).to_vec()).pack())
+        .build();
+    let record_data = encode_final_turn_record(&record);
+    let tb = TransactionBuilder::default()
+        .input(input)
+        .witness(witness.as_bytes().pack())
+        .output(
+            CellOutput::new_builder()
+                .capacity(POT)
+                .lock(attacker_lock)
+                .build(),
+        )
+        .output_data(Bytes::from(record_data.to_vec()).pack());
+    let tx = ctx.complete_tx(tb.build());
+    let r = ctx.verify_tx(&tx, 200_000_000);
     assert!(
         r.is_err(),
-        "payout to winner-args under an attacker-controlled lock must reject (prize-theft blocked)"
+        "claim output under attacker-controlled lock must reject (prize-theft blocked)"
     );
 }
 
@@ -752,18 +949,18 @@ fn run_forfeit_claim(
     // forfeit_deadline = claim_since + reveal_window (reveal_window pinned in args).
     let forfeit_deadline = since + REVEAL_WINDOW;
 
-    // Build the expected 316-byte pending-forfeit args blob (layout B).
-    let mut blob = Vec::with_capacity(316);
+    // Build the expected 357-byte pending-forfeit args blob (layout B).
+    let mut blob = Vec::with_capacity(357);
     blob.extend_from_slice(&escrow_code_hash); // [0..32]    escrow code_hash (PIN)
     blob.push(escrow_hash_type); // [32]       escrow hash_type
-    blob.extend_from_slice(&setup.args); // [33..219]  escrow args VERBATIM (186)
-    blob.extend_from_slice(&setup.claimant_id); // [219..239] claimant_id (20)
-    blob.extend_from_slice(&setup.stalled_idx.to_le_bytes()); // [239..243] stalled_idx (4 LE)
-    blob.extend_from_slice(&setup.head_k); // [243..275] head_k (32)
-    blob.extend_from_slice(&setup.committed_head); // [275..307] committed_head (32)
-    blob.push(setup.has_commit); // [307]      has_commit (1)
-    blob.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [308..316] deadline (8 LE)
-    assert_eq!(blob.len(), 316, "pending-forfeit args must be 316 bytes");
+    blob.extend_from_slice(&setup.args); // [33..260]  escrow args VERBATIM (227)
+    blob.extend_from_slice(&setup.claimant_id); // [260..280] claimant_id (20)
+    blob.extend_from_slice(&setup.stalled_idx.to_le_bytes()); // [280..284] stalled_idx (4 LE)
+    blob.extend_from_slice(&setup.head_k); // [284..316] head_k (32)
+    blob.extend_from_slice(&setup.committed_head); // [316..348] committed_head (32)
+    blob.push(setup.has_commit); // [348]      has_commit (1)
+    blob.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [349..357] deadline (8 LE)
+    assert_eq!(blob.len(), 357, "pending-forfeit args must be 357 bytes");
 
     // The pending-forfeit output lock: pinned forfeit-lock identity + expected blob.
     let (forfeit_code_hash, _) = forfeit_lock_identity();

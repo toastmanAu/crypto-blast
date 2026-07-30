@@ -14,13 +14,14 @@ ADVANCE / FORFEIT-FINALIZE transactions, the forfeit-lock binary, and the
 
 **Proof status:** 10 ckb-testtool tests pass for the three original paths
 (in-memory CKB-VM); the tag-3 forfeit-claim path adds 5 more (see
-[`docs/FORFEIT.md`](FORFEIT.md)). Testnet broadcast is a manual Plan-B step — no
-autonomous broadcast is made.
+[`docs/FORFEIT.md`](FORFEIT.md)); the tag-1 court-claim transition adds 3 more
+(see [`docs/CHALLENGE.md`](CHALLENGE.md)). Testnet broadcast is a manual Plan-B
+step — no autonomous broadcast is made.
 Cross-reference: [`docs/COMMITMENT.md §8`](COMMITMENT.md#8-escrow-lock-phase-4a).
 
 ---
 
-## 1. Lock Args (186 bytes)
+## 1. Lock Args (227 bytes)
 
 ```
 expected_payout_code_hash(32)
@@ -33,16 +34,23 @@ expected_payout_code_hash(32)
 ‖ reveal_window(8, LE u64)            ← Phase 4 (forfeit path only)
 ‖ forfeit_lock_code_hash(32)          ← Phase 4 (PIN)
 ‖ forfeit_lock_hash_type(1)           ← Phase 4
-= 186 bytes
+‖ challenge_window(8, LE u64)         ← Challenge window (court path only)
+‖ claim_lock_code_hash(32)            ← Challenge window (PIN)
+‖ claim_lock_hash_type(1)             ← Challenge window
+= 227 bytes
 ```
 
 The first 145 bytes are the original Phase-4A layout. Phase 4 appends
 `reveal_window` (`args[145..153]`) and the forfeit-lock pin
 (`forfeit_lock_code_hash` `args[153..185]` + `forfeit_lock_hash_type` `args[185]`),
-read **only** by the tag-3 FORFEIT-CLAIM branch (§2.4). The court / happy / refund
-paths **ignore the new fields** — they parse the same first 145 bytes as before.
+read **only** by the tag-3 FORFEIT-CLAIM branch (§2.4). The challenge window
+appends `challenge_window` (`args[186..194]`) and the claim-lock pin
+(`claim_lock_code_hash` `args[194..226]` + `claim_lock_hash_type` `args[226]`),
+read **only** by the tag-1 COURT branch (§2.2). The happy / refund paths
+**ignore everything after the deadline** — they parse the same first 145 bytes.
 See [`docs/FORFEIT.md §5`](FORFEIT.md#5-the-two-args-layouts-as-built) for the
-full byte-offset map and the 316-byte pending-forfeit args the tag-3 branch emits.
+357-byte pending-forfeit args and [`docs/CHALLENGE.md §3`](CHALLENGE.md#3-cells-and-committed-state)
+for the 114-byte pending-claim args.
 
 **`playerN_id`** is the player's **blake160** = first 20 bytes of
 `blake2b256(compressed_pubkey, "ckb-default-hash")`. This is the same identity
@@ -101,7 +109,7 @@ valid signature is insufficient.
 
 The network fee MUST come from a SEPARATE fee input (see §7).
 
-### 2.2 Path 1 — COURT (tag=1, trustless replay)
+### 2.2 Path 1 — COURT (tag=1, trustless replay → pending-claim cell)
 
 Witness layout:
 ```
@@ -109,24 +117,22 @@ tag=1(1) ‖ nonce0(32) ‖ nonce1(32) ‖ attested_envelope(variable)
 ```
 
 **Algorithm:**
-1. Parse 145-byte args; assert `player0_id ≠ player1_id` (`E_EQUAL_IDS=16`).
+1. Parse 227-byte args; assert `player0_id ≠ player1_id` (`E_EQUAL_IDS=16`).
 2. Parse `tag=1 ‖ nonce0(32) ‖ nonce1(32) ‖ envelope` from `witness[0].lock`.
 3. Verify `blake2b(nonce0) == nonce0_commit` and `blake2b(nonce1) == nonce1_commit`.
 4. Derive `seed = first 4 bytes LE (i32) of blake2b(nonce0 ‖ nonce1)`.
-5. Decode the attested envelope (§3); call `create_world(seed, 1280, 720)`.
-6. For each turn block `i`:
-   - record acting team = `world.apes[world.active_ape].team` at block start;
-   - recover signer pubkey from `sig` over `attest_message(seed, i, tape_bytes)`;
-   - assert `blake160(pubkey) == player{0|1}_id` for the acting team (`E_ACTOR_MISMATCH=11`);
-   - call `step_world` over every tick of `decode_tape(tape_bytes)` (no early break).
-7. Read `world.winner` (`None` → `E_NO_WINNER=12`); assert payout under pinned lock.
-8. Exit `0` if all hold; distinct nonzero exit codes otherwise.
+5. Decode the court envelope (§3); call `create_world(seed, 1280, 720)`.
+6. Replay every turn, tracking the interleaved chain head and the **final-turn
+   record** (final actor, prior head, index, claimed head).
+7. Verify exactly 2 secp256k1 recoveries (each player's final head).
+8. Read `world.winner` (`None` → `E_NO_WINNER=12`).
+9. **Transition to a pending-claim cell** under the pinned claim-lock
+   (`args[194..227]`): the output carries the 114-byte `ClaimArgs` as lock.args
+   and the 88-byte final-turn record as output_data. `challenge_deadline =
+   since + challenge_window`. See [`docs/CHALLENGE.md`](CHALLENGE.md) for the
+   full claim-lock protocol (CHALLENGE / FINALIZE).
 
-**Payout binding (pinned lock):**
-- winner=0 → output paying `≥ pot` to `player0_id` under pinned lock
-- winner=1 → output paying `≥ pot` to `player1_id` under pinned lock
-- winner=-1 (draw) → `≥ pot/2` to each
-- `pot` = sum of all `GroupInput` cell capacities.
+**Cycles:** ~179M (replay-dominated; under the 200M ceiling).
 
 ### 2.3 Path 2 — REFUND (tag=2, timeout)
 
@@ -308,15 +314,18 @@ is wrong and the court/happy/refund paths will all reject valid spends.
 
 | Metric | Value |
 |--------|-------|
-| `lock.args` size | **186 bytes** (was 145 in 4A; +`reveal_window` +forfeit-lock pin) |
-| escrow-lock binary (`riscv64imac-unknown-none-elf`, release, ELF) | **355,584 bytes (~347 KB)** (grew with the tag-3 path; was 348,288 in 4A) |
+| `lock.args` size | **227 bytes** (was 186 in Phase 4; +`challenge_window` +claim-lock pin) |
+| escrow-lock binary (`riscv64imac-unknown-none-elf`, release, ELF) | **374,968 bytes (~366 KB)** |
 | forfeit-lock binary (`forfeit.rs`, Phase 4) | 300,128 bytes (~293 KB) — no world replay |
-| verifier-lock binary (Phase 2, for comparison) | 191,872 bytes (~188 KB) |
-| Court-path cycles (23-turn fixture, **2 secp recoveries**, ckb-testtool) | **148,309,757 (~148M)** |
+| claim-lock binary (`claim.rs`, challenge window) | 301,912 bytes (~295 KB) — no world replay |
+| verifier-lock binary (Phase 2, for comparison) | 212,256 bytes (~207 KB) |
+| Court-claim cycles (23-turn fixture, **2 secp recoveries**, ckb-testtool) | **179,366,690 (~179M)** |
+| CHALLENGE cycles (claim-lock tag 3, ckb-testtool) | **6,232,917 (~6.2M)** — one chain step + one recovery |
+| FINALIZE cycles (claim-lock tag 4, ckb-testtool) | **58,692 (~59K)** — payout check only |
 | FORFEIT-CLAIM cycles (tag 3, shape 2, 5-tape prefix, ckb-testtool) | **71,818,991 (~71.8M)** — replay-dominated, scales with prefix length (see [`docs/FORFEIT.md §8`](FORFEIT.md#8-measured-cycle-counts-ckb-testtool-as-built)) |
 | Happy-path cycles | not measured (2 secp recoveries; much lower than court) |
 | Refund-path cycles | not measured (no secp; very low) |
-| Cycle limits | happy/refund well under the 200M mainnet per-tx limit; **court ~148M fits under 200M** (~1.35× headroom; replay-dominated — scales with match ticks, not turn count); FORFEIT-CLAIM ~71.8M for a 5-tape prefix |
+| Cycle limits | happy/refund well under the 200M mainnet per-tx limit; **court-claim ~179M fits under 200M** (replay-dominated); CHALLENGE ~6.2M; FINALIZE ~59K; FORFEIT-CLAIM ~71.8M for a 5-tape prefix |
 | secp implementation | k256 0.13 bundled (no_std, no precomputed tables) |
 | Court fixture turns | 23 (synthetic self-destruct match, seed=1234, winner=player1) |
 
@@ -328,15 +337,19 @@ is wrong and the court/happy/refund paths will all reject valid spends.
 > per-turn sigs). The dynamic-loading secp optimization is no longer the primary
 > lever; at 2 recoveries the bundled-k256 cost fits under 200M.
 
-### Residual — Final-Move Equivocation (addressed in Phase 4)
+### Residual — Final-Move Equivocation (CLOSED)
 
-> **Status:** the play-time half of this residual — binding each move when it is
-> played so a committed move cannot be re-authored or withheld — is now closed by
-> the commit-reveal **forfeit protocol** (the tag-3 FORFEIT-CLAIM path above + the
-> separate forfeit-lock). See [`docs/FORFEIT.md`](FORFEIT.md). Full closure of the
-> residual = that play-time binding **plus** the court challenge window (on-chain
-> enforcement of a *detected* re-author), which remains a separate follow-up. The
-> original analysis is retained below for context.
+> **Status:** this residual is now **fully closed** by two complementary
+> mechanisms:
+> 1. **Play-time binding** — the commit-reveal **forfeit protocol** (tag-3
+>    FORFEIT-CLAIM + forfeit-lock) binds each move when played and forces a
+>    stall to resolve on-chain. See [`docs/FORFEIT.md`](FORFEIT.md).
+> 2. **On-chain fraud proof** — the **court challenge window** (tag-1 COURT →
+>    pending-claim cell → CHALLENGE/FINALIZE) lets the honest winner prove
+>    final-move equivocation and slash the forger. See
+>    [`docs/CHALLENGE.md`](CHALLENGE.md).
+>
+> The original analysis is retained below for context.
 
 The final turn of a match has no successor, so only its author signs the chain
 head that commits to it. If the loser happens to act last, they can submit a
@@ -437,6 +450,10 @@ Run: `cd verifier/contract && cargo test --test escrow`
 | 29 | `E_FORFEIT_MATCH_OVER` | forfeit-claim: prefix already has a winner (settle via court) |
 | 30 | `E_FORFEIT_COMMIT_SIG` | forfeit-claim: shape-1 commit not signed by the stalled player |
 | 31 | `E_FORFEIT_OUTPUT` | forfeit-claim: pending-forfeit output malformed / wrong lock / underfunded |
+| 32 | `E_CLAIM_SINCE_NOT_ABSOLUTE` | court claim: `since` not an absolute-block lock |
+| 33 | `E_CLAIM_OUTPUT` | court claim: pending-claim output malformed / wrong lock / underfunded / bad data |
 
 The forfeit-lock binary (`forfeit.rs`) uses its own `E_FF_*` code namespace — see
 [`docs/FORFEIT.md §11`](FORFEIT.md#11-error-codes).
+The claim-lock binary (`claim.rs`) uses its own `E_CL_*` code namespace — see
+[`docs/CHALLENGE.md §8`](CHALLENGE.md#8-error-codes).

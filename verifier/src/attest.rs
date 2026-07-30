@@ -309,6 +309,108 @@ pub fn decode_attested(bytes: &[u8]) -> Option<Vec<AttestedBlock<'_>>> {
     Some(blocks)
 }
 
+// ---- Challenge-window primitives (court claim → pending-claim cell) ----
+
+/// The final-turn record committed into the pending-claim cell's output data.
+/// 88 bytes: `final_actor_id(20) ‖ final_prior_head(32) ‖ final_idx(4 LE) ‖
+/// final_claimed_head(32)`.
+pub struct FinalTurnRecord {
+    /// blake160 of the player who took the last turn.
+    pub final_actor_id: [u8; 20],
+    /// Chain head immediately before the final turn.
+    pub final_prior_head: [u8; 32],
+    /// The final turn's global index.
+    pub final_idx: u32,
+    /// The chain head the claim asserts for the final move.
+    pub final_claimed_head: [u8; 32],
+}
+
+pub const FINAL_TURN_RECORD_LEN: usize = 20 + 32 + 4 + 32; // 88
+
+/// Encode a final-turn record to its canonical 88-byte form.
+pub fn encode_final_turn_record(r: &FinalTurnRecord) -> [u8; FINAL_TURN_RECORD_LEN] {
+    let mut out = [0u8; FINAL_TURN_RECORD_LEN];
+    out[0..20].copy_from_slice(&r.final_actor_id);
+    out[20..52].copy_from_slice(&r.final_prior_head);
+    out[52..56].copy_from_slice(&r.final_idx.to_le_bytes());
+    out[56..88].copy_from_slice(&r.final_claimed_head);
+    out
+}
+
+/// Decode a final-turn record from exactly 88 bytes. `None` on wrong length.
+pub fn decode_final_turn_record(bytes: &[u8]) -> Option<FinalTurnRecord> {
+    if bytes.len() != FINAL_TURN_RECORD_LEN {
+        return None;
+    }
+    let final_actor_id: [u8; 20] = bytes[0..20].try_into().ok()?;
+    let final_prior_head: [u8; 32] = bytes[20..52].try_into().ok()?;
+    let final_idx = u32::from_le_bytes(bytes[52..56].try_into().ok()?);
+    let final_claimed_head: [u8; 32] = bytes[56..88].try_into().ok()?;
+    Some(FinalTurnRecord { final_actor_id, final_prior_head, final_idx, final_claimed_head })
+}
+
+/// `claim_commitment = blake2b256("ckb-default-hash"; encode_final_turn_record(r))`.
+/// Binds the pending-claim cell to the exact final-turn state the court replayed.
+pub fn claim_commitment(r: &FinalTurnRecord) -> [u8; 32] {
+    ckb_blake2b(&[&encode_final_turn_record(r)])
+}
+
+/// The pending-claim cell's `lock.args` (114 bytes).
+/// ```text
+/// expected_payout_code_hash(32) ‖ expected_payout_hash_type(1) ‖
+/// player0_id(20) ‖ player1_id(20) ‖
+/// asserted_winner(1: 0|1|-1) ‖ challenge_deadline_block(8 LE) ‖
+/// claim_commitment(32)
+/// ```
+pub struct ClaimArgs {
+    pub payout_code_hash: [u8; 32],
+    pub payout_hash_type: u8,
+    pub player0_id: [u8; 20],
+    pub player1_id: [u8; 20],
+    /// 0 = player 0 wins, 1 = player 1 wins, -1 (0xFF) = draw.
+    pub asserted_winner: i8,
+    pub challenge_deadline_block: u64,
+    pub claim_commitment: [u8; 32],
+}
+
+pub const CLAIM_ARGS_LEN: usize = 32 + 1 + 20 + 20 + 1 + 8 + 32; // 114
+
+/// Encode claim args to their canonical 114-byte form.
+pub fn encode_claim_args(a: &ClaimArgs) -> [u8; CLAIM_ARGS_LEN] {
+    let mut out = [0u8; CLAIM_ARGS_LEN];
+    out[0..32].copy_from_slice(&a.payout_code_hash);
+    out[32] = a.payout_hash_type;
+    out[33..53].copy_from_slice(&a.player0_id);
+    out[53..73].copy_from_slice(&a.player1_id);
+    out[73] = a.asserted_winner as u8;
+    out[74..82].copy_from_slice(&a.challenge_deadline_block.to_le_bytes());
+    out[82..114].copy_from_slice(&a.claim_commitment);
+    out
+}
+
+/// Decode claim args from exactly 114 bytes. `None` on wrong length.
+pub fn decode_claim_args(bytes: &[u8]) -> Option<ClaimArgs> {
+    if bytes.len() != CLAIM_ARGS_LEN {
+        return None;
+    }
+    let payout_code_hash: [u8; 32] = bytes[0..32].try_into().ok()?;
+    let payout_hash_type = bytes[32];
+    let player0_id: [u8; 20] = bytes[33..53].try_into().ok()?;
+    let player1_id: [u8; 20] = bytes[53..73].try_into().ok()?;
+    let asserted_winner = bytes[73] as i8;
+    let challenge_deadline_block = u64::from_le_bytes(bytes[74..82].try_into().ok()?);
+    let claim_commitment: [u8; 32] = bytes[82..114].try_into().ok()?;
+    Some(ClaimArgs {
+        payout_code_hash,
+        payout_hash_type,
+        player0_id,
+        player1_id,
+        asserted_winner,
+        challenge_deadline_block,
+        claim_commitment,
+    })
+}
+
 #[cfg(test)]
 mod court_chain_tests {
     use super::*;
@@ -417,5 +519,116 @@ mod court_chain_tests {
         badshape.extend_from_slice(&sb);
         badshape.push(3u8);
         assert!(decode_forfeit_evidence(&badshape).is_none());
+    }
+
+    #[test]
+    fn final_turn_record_round_trips() {
+        let r = FinalTurnRecord {
+            final_actor_id: [1u8; 20],
+            final_prior_head: [2u8; 32],
+            final_idx: 42,
+            final_claimed_head: [3u8; 32],
+        };
+        let bytes = encode_final_turn_record(&r);
+        assert_eq!(bytes.len(), FINAL_TURN_RECORD_LEN);
+        let d = decode_final_turn_record(&bytes).expect("decode");
+        assert_eq!(d.final_actor_id, r.final_actor_id);
+        assert_eq!(d.final_prior_head, r.final_prior_head);
+        assert_eq!(d.final_idx, r.final_idx);
+        assert_eq!(d.final_claimed_head, r.final_claimed_head);
+    }
+
+    #[test]
+    fn final_turn_record_rejects_wrong_length() {
+        assert!(decode_final_turn_record(&[0u8; 87]).is_none());
+        assert!(decode_final_turn_record(&[0u8; 89]).is_none());
+    }
+
+    #[test]
+    fn claim_commitment_is_deterministic_and_sensitive() {
+        let r = FinalTurnRecord {
+            final_actor_id: [1u8; 20],
+            final_prior_head: [2u8; 32],
+            final_idx: 0,
+            final_claimed_head: [3u8; 32],
+        };
+        let c1 = claim_commitment(&r);
+        assert_eq!(c1, claim_commitment(&r)); // deterministic
+        // Sensitive to each field:
+        let mut r2 = FinalTurnRecord { final_idx: 1, ..r };
+        assert_ne!(claim_commitment(&r2), c1);
+        r2 = FinalTurnRecord { final_actor_id: [9u8; 20], ..r };
+        assert_ne!(claim_commitment(&r2), c1);
+        r2 = FinalTurnRecord { final_prior_head: [9u8; 32], ..r };
+        assert_ne!(claim_commitment(&r2), c1);
+        r2 = FinalTurnRecord { final_claimed_head: [9u8; 32], ..r };
+        assert_ne!(claim_commitment(&r2), c1);
+    }
+
+    #[test]
+    fn claim_commitment_matches_ts_golden() {
+        // Golden vector computed by TS: actorId=[1;20], priorHead=[2;32], idx=42, claimedHead=[3;32]
+        let r = FinalTurnRecord {
+            final_actor_id: [1u8; 20],
+            final_prior_head: [2u8; 32],
+            final_idx: 42,
+            final_claimed_head: [3u8; 32],
+        };
+        let c = claim_commitment(&r);
+        assert_eq!(
+            c.iter().map(|b| format!("{:02x}", b)).collect::<String>(),
+            "13e97e2828b550ca76fc54f653f51556c967690fe932102e88d661af521eb4f1"
+        );
+    }
+
+    #[test]
+    fn claim_args_round_trips() {
+        let a = ClaimArgs {
+            payout_code_hash: [0xAA; 32],
+            payout_hash_type: 1,
+            player0_id: [0x11; 20],
+            player1_id: [0x22; 20],
+            asserted_winner: -1,
+            challenge_deadline_block: 123_456,
+            claim_commitment: [0xBB; 32],
+        };
+        let bytes = encode_claim_args(&a);
+        assert_eq!(bytes.len(), CLAIM_ARGS_LEN);
+        let d = decode_claim_args(&bytes).expect("decode");
+        assert_eq!(d.payout_code_hash, a.payout_code_hash);
+        assert_eq!(d.payout_hash_type, a.payout_hash_type);
+        assert_eq!(d.player0_id, a.player0_id);
+        assert_eq!(d.player1_id, a.player1_id);
+        assert_eq!(d.asserted_winner, -1);
+        assert_eq!(d.challenge_deadline_block, 123_456);
+        assert_eq!(d.claim_commitment, a.claim_commitment);
+    }
+
+    #[test]
+    fn claim_args_rejects_wrong_length() {
+        assert!(decode_claim_args(&[0u8; 113]).is_none());
+        assert!(decode_claim_args(&[0u8; 115]).is_none());
+    }
+
+    #[test]
+    fn claim_args_winner_encoding() {
+        let base = ClaimArgs {
+            payout_code_hash: [0; 32],
+            payout_hash_type: 0,
+            player0_id: [0; 20],
+            player1_id: [0; 20],
+            asserted_winner: 0,
+            challenge_deadline_block: 0,
+            claim_commitment: [0; 32],
+        };
+        // 0, 1, -1 all round-trip
+        for w in [0i8, 1, -1] {
+            let a = ClaimArgs { asserted_winner: w, ..base };
+            let d = decode_claim_args(&encode_claim_args(&a)).unwrap();
+            assert_eq!(d.asserted_winner, w);
+        }
+        // -1 encodes as 0xFF
+        let bytes = encode_claim_args(&ClaimArgs { asserted_winner: -1, ..base });
+        assert_eq!(bytes[73], 0xFF);
     }
 }

@@ -2,8 +2,8 @@
 
 **Date:** 2026-06-29
 **Branch:** `feat/phase4-match-settlement` (design only)
-**Status:** DESIGN ONLY — deferred, not for implementation. No implementation plan
-is to be written from this spec until explicitly approved.
+**Status:** IMPLEMENTED — see [`docs/CHALLENGE.md`](../../CHALLENGE.md) for the
+as-built protocol, cycle counts, and error codes.
 **Closes:** the residual documented in
 `docs/superpowers/specs/2026-06-28-phase4a-interleaved-attestation-court.md` §6 and
 `docs/ESCROW.md` §8 (final-move equivocation).

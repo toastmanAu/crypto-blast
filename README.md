@@ -37,13 +37,13 @@ Six ballistic weapons, data-driven from `src/weapons/weaponData.ts`. `moonShot` 
 | Weapon | Ammo | Notes |
 |--------|------|-------|
 | Moon Shot 🚀 | ∞ | reliable all-rounder |
-| Gas Grenade ⛽ | 3 | bigger, softer blast |
-| Airdrop Cluster 🪂 | 2 | (shrapnel sub-munitions → P4) |
-| Watermelon Bomb 🍉 | 3 | heavy hitter (seed sub-bombs → P4) |
-| Llama Bomb 🦙 | 2 | mid-weight |
-| Bridge 🌉 | 1 | **placeholder** — ballistic stand-in; real teleport is P4 |
+| Gas Grenade ⛽ | 3 | bigger, softer blast; leaves a lingering DoT cloud |
+| Airdrop Cluster 🪂 | 2 | splits into shrapnel sub-munitions on impact |
+| Watermelon Bomb 🍉 | 3 | heavy hitter; seeds sub-bombs on impact |
+| Llama Bomb 🦙 | 2 | mid-weight; plants a proximity mine |
+| Bridge 🌉 | 1 | teleports the firing ape to its impact point |
 
-Special munition behaviours (clusters, mines, gas clouds, teleport) are deferred to **P4** — the current cut is purely ballistic (each weapon differs in flight params, blast radius, and damage).
+All six weapons have their full special behaviours implemented: cluster shrapnel sub-munitions (Airdrop Cluster), seed sub-bombs (Watermelon Bomb), proximity mines (Llama Bomb), lingering damage-over-time gas clouds (Gas Grenade), and teleport (Bridge).
 
 ---
 
@@ -83,9 +83,11 @@ The **off-chain verifier works today** and runs in CI as part of the test suite 
 - **The commitment is CKB-native.** It's blake2b-256 with CKB's `ckb-default-hash` personalization, so a CKB-VM verifier computes the identical 32-byte digest via the native `ckb_blake2b` — no hash to port into RISC-V.
 - **The simulation is cross-engine deterministic.** The sim path uses only operations ECMAScript requires to be correctly-rounded (`+ - * /`, `Math.sqrt`) plus integer/exact ops. The one prior gap — `Math.cos` / `Math.sin` for launch angles, which are *implementation-approximated* and differ across engines — is gone: `src/core/trig.ts` provides `dsin`/`dcos` built from deterministic ops only (range-reduced Taylor polynomial), verified to stay correct even with `Math.sin`/`Math.cos` sabotaged (`tests/trig.test.ts`). The commitment is therefore identical on any conformant engine, not just V8.
 
-The **CKB-VM / RISC-V verifier lock script is implemented** (`verifier/contract/`). It is a CKB lock script whose args commit to `(seed, claimed_commitment)` (36 bytes); spending it requires a `WitnessArgs.lock` carrying the binary replay tape. The tape is **format v2** (3 bytes/tick), encoding aim/fire plus the movement flags (`moveLeft`/`moveRight`/`jumpPressed`); the per-turn movement budget lives in the committed `WorldState`, so the verifier enforces the movement cap on-chain, not just the client. The kernel re-executes the sim from `seed`, computes `blake2b-256(serialize_world)`, and exits 0 only if the recomputed digest matches the claim. Three ckb-testtool tests gate the protocol: accept valid tape, reject forged commitment, reject wrong seed — all PASS (54 M cycles in-VM, well under block limits). Testnet broadcast is a manual runbook (`docs/VERIFIER_DEPLOY.md`) — locally proven via ckb-testtool, not yet broadcast.
+The **CKB-VM / RISC-V verifier lock script is implemented and deployed to testnet** (`verifier/contract/`). It is a CKB lock script whose args commit to `(seed, claimed_commitment)` (36 bytes); spending it requires a `WitnessArgs.lock` carrying the binary replay tape. The tape is **format v2** (3 bytes/tick), encoding aim/fire plus the movement flags (`moveLeft`/`moveRight`/`jumpPressed`); the per-turn movement budget lives in the committed `WorldState`, so the verifier enforces the movement cap on-chain, not just the client. The kernel re-executes the sim from `seed`, computes `blake2b-256(serialize_world)`, and exits 0 only if the recomputed digest matches the claim. Three ckb-testtool tests gate the protocol: accept valid tape, reject forged commitment, reject wrong seed — all PASS (54 M cycles in-VM, well under block limits). Testnet deployment: Type-ID code_hash `0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305` (see `verifier/deployment-record.json`); spend runbook in `docs/VERIFIER_DEPLOY.md`.
 
 The **trustless-wager escrow primitive is implemented** (`verifier/contract/src/escrow.rs`, see `docs/ESCROW.md`). It turns the verifier into money: a cell holding both players' stakes pays the real winner via three spend paths — a cheap mutual-signed *happy* path, a *court* path that replays a per-turn-signed match tape and extracts the winner, and a timeout *refund*. The seed is chosen by commit-reveal (neither player picks the terrain); each turn's moves are signed by the acting player; and every payout is bound to the winner by the recipient lock's `code_hash` + `hash_type` + args (not args alone — a deliberate fix for a prize-theft vector). Ten ckb-testtool tests gate all three paths. The court path uses an interleaved hash chain with **2 secp256k1 recoveries** (constant in turn count), measured at **~148M cycles** (~1.35× under the 200M mainnet ceiling; replay-dominated); happy/refund are well under. The economic layer (lobby, custody wiring, payout) lands in FiberQuest (Phase 4B), not here.
+
+The **commit-reveal forfeit-lock is implemented** (`verifier/contract/src/forfeit.rs`, see `docs/FORFEIT.md`). It closes the court path's final-move equivocation residual by binding each move when it is played (COMMIT → ACK → REVEAL) and forcing a stall to resolve on-chain as reveal-or-forfeit. Three transactions: FORFEIT-CLAIM (escrow-lock tag 3, ~72M cycles), ADVANCE (forfeit-lock tag 1, ~6M), and FORFEIT-FINALIZE (forfeit-lock tag 2, ~53K). 12 ckb-testtool tests (5 escrow forfeit-claim + 7 forfeit-lock) cover both stall shapes and all pin/reject paths.
 
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
@@ -124,10 +126,13 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 - **Render/art wave** — sprites, ape walk/jump/hurt/victory animations, tiled terrain, effects (muzzle flash, smoke, splash, explosion), crystal decor. ✅
 - **P3** — data-driven arsenal + radial weapon wheel + per-team ammo, threaded through the deterministic pipeline. ✅
 - **Movement** — active-ape walk (`A`/`D`) + jump (`W`) with slope step-climbing and a per-turn movement budget; encoded in the tape (format v2) and the committed `WorldState` so it's verifiable on-chain (PR #9). ✅
-- **P4** — special munition behaviours (cluster shrapnel, seed sub-bombs, proximity mines, gas DoT cloud, Bridge teleport). ⏳
+- **P4** — special munition behaviours (cluster shrapnel, seed sub-bombs, proximity mines, gas DoT cloud, Bridge teleport). ✅
+- **P4** — AI opponents (deterministic bot + mode select), supply crates (parachuting weapon/health pickups), match flow & juice (turn banners, win screen, sudden death, sound). ✅
 - **Commitment hardening** — 32-byte blake2b-256 commitment (`commitWorld`, CKB-native `ckbhash`) over a canonical float-safe serialization; deterministic `dsin`/`dcos` so the commitment is cross-engine canonical. ✅
-- **On-chain verifier lock script** — `verifier/contract/` ckb-std lock script; ckb-testtool accept/reject PASS (54 M cycles, ~187 KB binary); testnet broadcast = manual runbook (`docs/VERIFIER_DEPLOY.md`). ✅ (locally proven)
-- **Trustless-wager escrow primitive** — `verifier/contract/src/escrow.rs` (`docs/ESCROW.md`); 2-player stake cell, court/happy/refund spend paths, commit-reveal seed + interleaved-chain court (**2 recoveries**, ~148M cycles, under 200M) + winner-bound payout; 10/10 ckb-testtool. ✅ (locally proven) — economic layer = FiberQuest **Phase 4B** ⏳
+- **On-chain verifier lock script** — `verifier/contract/` ckb-std lock script; ckb-testtool accept/reject PASS (54 M cycles, ~187 KB binary); deployed to testnet (Type-ID `0xe987…3305`). ✅
+- **Trustless-wager escrow primitive** — `verifier/contract/src/escrow.rs` (`docs/ESCROW.md`); 2-player stake cell, court/happy/refund spend paths, commit-reveal seed + interleaved-chain court (**2 recoveries**, ~148M cycles, under 200M) + winner-bound payout; 10/10 ckb-testtool. ✅ — economic layer = FiberQuest **Phase 4B** ⏳
+- **Commit-reveal forfeit-lock** — `verifier/contract/src/forfeit.rs` (`docs/FORFEIT.md`); play-time move binding (COMMIT/ACK/REVEAL) + on-chain reveal-or-forfeit; FORFEIT-CLAIM (~72M) / ADVANCE (~6M) / FINALIZE (~53K); 12/12 ckb-testtool. ✅
+- **Court challenge window** — optimistic fraud proof for final-move equivocation; CLAIM → pending-claim cell → CHALLENGE (equivocation proof) / FINALIZE (timeout). Design spec approved; implementation in progress. ⏳
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 

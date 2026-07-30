@@ -2,7 +2,7 @@
 //! (tag=2). (CR Task 6 adds the ADVANCE path + the reject suite.)
 //!
 //! The pending-forfeit cell holds the pot. Its lock is the `forfeit-lock` script
-//! with the 316-byte args layout (see `src/forfeit.rs`). FORFEIT-FINALIZE pays the
+//! with the 357-byte args layout (see `src/forfeit.rs`). FORFEIT-FINALIZE pays the
 //! full pot to the claimant under the payout pin embedded in `escrow_args[0..33]`,
 //! but ONLY once the GroupInput `since` is an absolute block number ≥ the
 //! embedded `forfeit_deadline`.
@@ -79,23 +79,23 @@ fn sign_recoverable(key: &SigningKey, msg: &[u8; 32]) -> Vec<u8> {
     out
 }
 
-/// Build a 186-byte escrow args whose `[0..33]` is the PINNED payout lock
+/// Build a 227-byte escrow args whose `[0..33]` is the PINNED payout lock
 /// (`payout_lock_identity()`) and `[33..73]` are the two player ids; the rest is
 /// zeros. FINALIZE pays under the `[0..33]` payout pin.
 fn build_escrow_args(p0: &[u8; 20], p1: &[u8; 20]) -> Vec<u8> {
     let (payout_code_hash, payout_hash_type) = payout_lock_identity();
-    let mut a = Vec::with_capacity(186);
+    let mut a = Vec::with_capacity(227);
     a.extend_from_slice(&payout_code_hash); // [0..32]  payout code_hash
     a.push(payout_hash_type); // [32]     payout hash_type
     a.extend_from_slice(p0); // [33..53] player0_id
     a.extend_from_slice(p1); // [53..73] player1_id
-    a.resize(186, 0u8); // rest unused by the forfeit-lock
-    assert_eq!(a.len(), 186, "escrow args must be 186 bytes");
+    a.resize(227, 0u8); // rest unused by the forfeit-lock
+    assert_eq!(a.len(), 227, "escrow args must be 227 bytes");
     a
 }
 
-/// Assemble the 316-byte pending-forfeit args blob (layout in `src/forfeit.rs`).
-/// `args[0..33]` is the escrow-lock PIN (`escrow_lock_identity()`); `args[33..219]`
+/// Assemble the 357-byte pending-forfeit args blob (layout in `src/forfeit.rs`).
+/// `args[0..33]` is the escrow-lock PIN (`escrow_lock_identity()`); `args[33..260]`
 /// is the escrow args VERBATIM.
 fn pending_forfeit_args(
     escrow_args: &[u8],
@@ -107,17 +107,17 @@ fn pending_forfeit_args(
     forfeit_deadline: u64,
 ) -> Vec<u8> {
     let (escrow_code_hash, escrow_hash_type) = escrow_lock_identity();
-    let mut b = Vec::with_capacity(316);
+    let mut b = Vec::with_capacity(357);
     b.extend_from_slice(&escrow_code_hash); // [0..32]    escrow code_hash (PIN)
     b.push(escrow_hash_type); // [32]       escrow hash_type
-    b.extend_from_slice(escrow_args); // [33..219]  escrow args VERBATIM (186)
-    b.extend_from_slice(claimant_id); // [219..239] claimant_id (20)
-    b.extend_from_slice(&stalled_idx.to_le_bytes()); // [239..243] stalled_idx (4 LE)
-    b.extend_from_slice(head_k); // [243..275] head_k (32)
-    b.extend_from_slice(committed_head); // [275..307] committed_head (32)
-    b.push(has_commit); // [307]      has_commit (1)
-    b.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [308..316] deadline (8 LE)
-    assert_eq!(b.len(), 316, "pending-forfeit args must be 316 bytes");
+    b.extend_from_slice(escrow_args); // [33..260]  escrow args VERBATIM (227)
+    b.extend_from_slice(claimant_id); // [260..280] claimant_id (20)
+    b.extend_from_slice(&stalled_idx.to_le_bytes()); // [280..284] stalled_idx (4 LE)
+    b.extend_from_slice(head_k); // [284..316] head_k (32)
+    b.extend_from_slice(committed_head); // [316..348] committed_head (32)
+    b.push(has_commit); // [348]      has_commit (1)
+    b.extend_from_slice(&forfeit_deadline.to_le_bytes()); // [349..357] deadline (8 LE)
+    assert_eq!(b.len(), 357, "pending-forfeit args must be 357 bytes");
     b
 }
 

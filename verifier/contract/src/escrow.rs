@@ -1,21 +1,27 @@
-//! Crypto Blast match-settlement ESCROW LOCK SCRIPT — Phase 4A, Path 1 (court).
+//! Crypto Blast match-settlement ESCROW LOCK SCRIPT — Phase 4A + challenge window.
 //!
 //! The escrow cell holds both players' stakes (the pot = the cell capacity). It
-//! is spent through one of three tag-selected paths; THIS binary implements the
-//! load-bearing **court** path (tag=1): a trustless on-chain replay that
-//! adjudicates a disputed match and binds the payout to the real winner.
+//! is spent through one of four tag-selected paths:
 //!
-//! # `lock.args` (186 bytes)
+//! * **tag=0 HAPPY** — mutual-signed payout (cheap, no replay).
+//! * **tag=1 COURT** — trustless on-chain replay → **pending-claim cell** under
+//!   a separate claim-lock (challenge window). The claim enters a challenge
+//!   period during which the counterparty can prove final-move equivocation.
+//! * **tag=2 REFUND** — timeout 50/50 split.
+//! * **tag=3 FORFEIT-CLAIM** — prefix replay → pending-forfeit cell under the
+//!   forfeit-lock (commit-reveal move binding).
+//!
+//! # `lock.args` (227 bytes)
 //! ```text
 //! expected_payout_code_hash(32) ‖ expected_payout_hash_type(1) ‖
 //! player0_id(20) ‖ player1_id(20) ‖ nonce0_commit(32) ‖ nonce1_commit(32) ‖
 //! deadline_block(8 LE) ‖ reveal_window(8 LE) ‖
-//! forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)
+//! forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1) ‖
+//! challenge_window(8 LE) ‖ claim_lock_code_hash(32) ‖ claim_lock_hash_type(1)
 //! ```
-//! `reveal_window` (funder-set) and the `forfeit_lock_*` PIN are consumed ONLY by
-//! the forfeit-claim path (tag=3); the happy/court/refund paths ignore them. The
-//! forfeit pin binds the pending-forfeit output cell's lock SCRIPT (code_hash +
-//! hash_type) — see Path 3 below.
+//! `reveal_window` + `forfeit_lock_*` are consumed ONLY by tag=3 (forfeit-claim).
+//! `challenge_window` + `claim_lock_*` are consumed ONLY by tag=1 (court → claim).
+//! The happy/refund paths parse only the first 145 bytes.
 //! `playerN_id` is the player's **blake160** (first 20 bytes of
 //! `blake2b256(compressed_pubkey, "ckb-default-hash")`) — the secp256k1-blake160
 //! lock-arg convention. It serves as BOTH the move-signature identity AND the
@@ -86,8 +92,8 @@ mod contract {
         entry,
         error::SysError,
         high_level::{
-            load_cell_capacity, load_cell_lock, load_input_out_point, load_input_since,
-            load_script, load_witness_args,
+            load_cell_capacity, load_cell_data, load_cell_lock, load_input_out_point,
+            load_input_since, load_script, load_witness_args,
         },
     };
     use core::alloc::{GlobalAlloc, Layout};
@@ -96,8 +102,10 @@ mod contract {
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use linked_list_allocator::Heap;
     use verifier::{
-        court_chain_genesis, court_chain_step, create_world, decode_court_envelope,
-        decode_forfeit_evidence, decode_tape, derive_seed, step_world,
+        claim_commitment, court_chain_genesis, court_chain_step, create_world,
+        decode_court_envelope, decode_forfeit_evidence, decode_tape, derive_seed,
+        encode_claim_args, encode_final_turn_record, step_world, ClaimArgs, FinalTurnRecord,
+        FINAL_TURN_RECORD_LEN,
     };
 
     // ---- Single-hart global heap (identical to the Phase-2 verifier-lock) ----
@@ -170,7 +178,8 @@ mod contract {
     const E_SIG_RECOVER: i8 = 10;
     const E_ACTOR_MISMATCH: i8 = 11;
     const E_NO_WINNER: i8 = 12;
-    const E_PAYOUT: i8 = 13;
+    #[allow(dead_code)]
+    const E_PAYOUT: i8 = 13; // was court payout; now superseded by E_CLAIM_OUTPUT
     const E_ACTIVE_APE_OOB: i8 = 14; // M1: malformed replay → out-of-range active ape
     const E_SYSCALL: i8 = 15; // M2: non-IndexOutOfBound syscall error (fail closed)
     const E_EQUAL_IDS: i8 = 16; // M3: player0_id == player1_id
@@ -196,21 +205,27 @@ mod contract {
     const E_FORFEIT_COMMIT_SIG: i8 = 30; // shape-1 commit not signed by the stalled player
     const E_FORFEIT_OUTPUT: i8 = 31; // pending-forfeit output malformed / wrong lock / underfunded
 
+    // ---- Path 1 (court → pending-claim cell, challenge window) ----
+    const E_CLAIM_SINCE_NOT_ABSOLUTE: i8 = 32; // court claim since not an absolute-block lock
+    const E_CLAIM_OUTPUT: i8 = 33; // pending-claim output malformed / wrong lock / underfunded / bad data
+
     const ID_LEN: usize = 20;
     const CODE_HASH_LEN: usize = 32;
     const HASH_TYPE_LEN: usize = 1;
     // expected_payout_code_hash(32) ‖ hash_type(1) ‖ p0(20) ‖ p1(20)
     //   ‖ commit0(32) ‖ commit1(32) ‖ deadline(8) ‖ reveal_window(8)
-    //   ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1) = 186
+    //   ‖ forfeit_lock_code_hash(32) ‖ forfeit_lock_hash_type(1)
+    //   ‖ challenge_window(8) ‖ claim_lock_code_hash(32) ‖ claim_lock_hash_type(1) = 227
     const ARGS_LEN: usize =
-        CODE_HASH_LEN + HASH_TYPE_LEN + ID_LEN * 2 + 32 * 2 + 8 + 8 + CODE_HASH_LEN + HASH_TYPE_LEN; // 186
+        CODE_HASH_LEN + HASH_TYPE_LEN + ID_LEN * 2 + 32 * 2 + 8 + 8 + CODE_HASH_LEN + HASH_TYPE_LEN
+        + 8 + CODE_HASH_LEN + HASH_TYPE_LEN; // 227
 
     // Pending-forfeit cell `lock.args` (layout B, consumed by CR Task 5):
-    // escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(186, VERBATIM)
+    // escrow_code_hash(32) ‖ escrow_hash_type(1) ‖ escrow_args(227, VERBATIM)
     //   ‖ claimant_id(20) ‖ stalled_idx(4 LE) ‖ head_k(32) ‖ committed_head(32)
-    //   ‖ has_commit(1) ‖ forfeit_deadline(8 LE) = 316
+    //   ‖ has_commit(1) ‖ forfeit_deadline(8 LE) = 357
     const PENDING_FORFEIT_ARGS_LEN: usize =
-        CODE_HASH_LEN + HASH_TYPE_LEN + ARGS_LEN + ID_LEN + 4 + 32 + 32 + 1 + 8; // 316
+        CODE_HASH_LEN + HASH_TYPE_LEN + ARGS_LEN + ID_LEN + 4 + 32 + 32 + 1 + 8; // 357
 
     fn ckb_blake2b(input: &[u8]) -> [u8; 32] {
         let mut h = Blake2bBuilder::new(32)
@@ -736,17 +751,25 @@ mod contract {
         };
 
         // Re-derive the interleaved chain during replay, tracking each player's
-        // FINAL head. M1: never panic on a malformed replay — fail closed.
+        // FINAL head AND the final-turn metadata for the challenge window.
+        // M1: never panic on a malformed replay — fail closed.
         let mut world = create_world(seed, 1280, 720);
         let mut head = court_chain_genesis(seed);
         let mut last0: Option<[u8; 32]> = None;
         let mut last1: Option<[u8; 32]> = None;
+        // Final-turn tracking for the pending-claim cell.
+        let mut final_prior_head = head; // head before the current turn
+        let mut final_idx: u32 = 0;
+        let mut final_actor_team: i64 = 0;
         for (i, tape) in env.tapes.iter().enumerate() {
             let active_ape = match world.apes.get(world.active_ape as usize) {
                 Some(a) => a,
                 None => return E_ACTIVE_APE_OOB,
             };
             let active_team = active_ape.team;
+            final_prior_head = head; // save the head BEFORE this turn
+            final_idx = i as u32;
+            final_actor_team = active_team;
             head = court_chain_step(&head, i as u32, tape);
             if active_team == 0 {
                 last0 = Some(head);
@@ -791,32 +814,103 @@ mod contract {
             None => return E_SIG_RECOVER,
         }
 
-        // The winner must receive the FULL pot under the pinned payout lock; the network fee therefore comes from a SEPARATE fee input (Plan B builder).
+        // ---- Challenge window: transition to a pending-claim cell ----
+        // Instead of paying the winner directly, the court path now transitions
+        // the pot into a pending-claim cell under the claim-lock pin. The claim
+        // enters a challenge window during which the counterparty can prove
+        // final-move equivocation and take the pot.
+
+        // Compute the final-turn record and its commitment.
+        let final_actor_id: [u8; 20] = if final_actor_team == 0 {
+            player0_id.try_into().unwrap_or([0u8; 20])
+        } else {
+            player1_id.try_into().unwrap_or([0u8; 20])
+        };
+        let record = FinalTurnRecord {
+            final_actor_id,
+            final_prior_head,
+            final_idx,
+            final_claimed_head: head,
+        };
+        let commitment = claim_commitment(&record);
+
+        // Challenge deadline from the GroupInput since (absolute block).
+        let since = match load_input_since(0, Source::GroupInput) {
+            Ok(s) => s,
+            Err(_) => return E_SYSCALL,
+        };
+        if (since >> 56) != 0 {
+            return E_CLAIM_SINCE_NOT_ABSOLUTE;
+        }
+        // challenge_window = args[186..194] LE u64.
+        let mut cw = [0u8; 8];
+        cw.copy_from_slice(&args[186..194]);
+        let challenge_window = u64::from_le_bytes(cw);
+        let challenge_deadline = since.saturating_add(challenge_window);
+
+        // Build the expected 114-byte pending-claim args.
+        let claim_args = ClaimArgs {
+            payout_code_hash: payout_code_hash.try_into().unwrap_or([0u8; 32]),
+            payout_hash_type,
+            player0_id: player0_id.try_into().unwrap_or([0u8; 20]),
+            player1_id: player1_id.try_into().unwrap_or([0u8; 20]),
+            asserted_winner: winner as i8,
+            challenge_deadline_block: challenge_deadline,
+            claim_commitment: commitment,
+        };
+        let expected_args = encode_claim_args(&claim_args);
+        let expected_data = encode_final_turn_record(&record);
+
+        // claim-lock pin = args[194..226] code_hash ‖ args[226] hash_type.
+        let claim_code_hash = &args[194..226];
+        let claim_hash_type = args[226];
+
+        // Verify the pending-claim output cell: lock matches the pin, args are
+        // byte-exact, data carries the final-turn record, capacity covers the pot.
         let pot = match pot_capacity() {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let to0 = match paid_to(player0_id, payout_code_hash, payout_hash_type) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let to1 = match paid_to(player1_id, payout_code_hash, payout_hash_type) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let ok = match winner {
-            0 => to0 >= pot,
-            1 => to1 >= pot,
-            -1 => {
-                let half = pot / 2;
-                to0 >= half && to1 >= half
+        let mut covered: u64 = 0;
+        let mut i = 0;
+        loop {
+            let out_lock = match load_cell_lock(i, Source::Output) {
+                Ok(s) => s,
+                Err(SysError::IndexOutOfBound) => break,
+                Err(_) => return E_SYSCALL,
+            };
+            let code_hash = out_lock.code_hash();
+            let hash_type: u8 = out_lock.hash_type().into();
+            let out_args = out_lock.args().raw_data();
+            if code_hash.raw_data().as_ref() == claim_code_hash
+                && hash_type == claim_hash_type
+                && out_args.len() == expected_args.len()
+                && out_args.as_ref() == expected_args.as_slice()
+            {
+                // Also verify the output data carries the final-turn record.
+                match load_cell_data(i, Source::Output) {
+                    Ok(data) => {
+                        if data.len() != FINAL_TURN_RECORD_LEN
+                            || data.as_slice() != expected_data.as_slice()
+                        {
+                            return E_CLAIM_OUTPUT;
+                        }
+                    }
+                    Err(SysError::IndexOutOfBound) => break,
+                    Err(_) => return E_SYSCALL,
+                }
+                match load_cell_capacity(i, Source::Output) {
+                    Ok(c) => covered = covered.saturating_add(c),
+                    Err(SysError::IndexOutOfBound) => break,
+                    Err(_) => return E_SYSCALL,
+                }
             }
-            _ => false,
-        };
-        if ok {
+            i += 1;
+        }
+        if covered >= pot {
             0
         } else {
-            E_PAYOUT
+            E_CLAIM_OUTPUT
         }
     }
 }

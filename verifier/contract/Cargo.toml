@@ -32,6 +32,15 @@ path = "src/escrow.rs"
 name = "forfeit-lock"
 path = "src/forfeit.rs"
 
+# The challenge-window claim-lock (CHALLENGE tag=3 + FINALIZE tag=4). Resolves
+# the pending-claim cell created by the escrow-lock's tag-1 court path:
+# CHALLENGE proves final-move equivocation (one chain step + one recovery);
+# FINALIZE pays the asserted winner after the challenge window times out.
+# Same no_std / no_main contract shape; imports court_chain_step + claim decode.
+[[bin]]
+name = "claim-lock"
+path = "src/claim.rs"
+
 # Contract-only deps: pulled in for the riscv64 build, never needed by the host
 # test harness. ckb-std supplies the syscall ABI + entry/panic glue; verifier is
 # the no_std sim core; blake2b-ref is the no_std ckb-default-hash; the linked-list
