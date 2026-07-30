@@ -1,81 +1,145 @@
-# Verifier-Lock: Testnet Deploy & Spend Runbook
+# CKB Contract Deploy & Spend Runbook
 
 This document is the **manual-only** playbook for deploying the Crypto Blast
-verifier lock script to CKB testnet and verifying a game tape on-chain.
+contract suite to CKB testnet and verifying a game tape on-chain.
 
 > **DO NOT run deploy commands in CI.**  All broadcasting steps require an
-> explicit `CKB_PRIVKEY` export and are only executed by running the scripts
-> below.
+> explicit keystore password prompt and are only executed manually.
 
 ---
 
 ## Overview
 
-The verifier-lock is a RISC-V CKB script that unlocks a cell when the tape
-carried in the witness deterministically replays (from the seed in lock args) to
-the commitment also in lock args.
+Crypto Blast deploys **four** RISC-V CKB lock scripts to testnet:
 
-Protocol:
+| Contract | Binary | Purpose | Args |
+|----------|--------|---------|------|
+| **verifier-lock** | `verifier-lock` | Replay a tape, check commitment | 36 bytes (seed ‖ commitment) |
+| **escrow-lock** | `escrow-lock` | Match settlement (happy/court/refund/forfeit-claim) | 227 bytes |
+| **forfeit-lock** | `forfeit-lock` | Forfeit protocol (ADVANCE/FINALIZE) | 357 bytes |
+| **claim-lock** | `claim-lock` | Challenge window (CHALLENGE/FINALIZE) | 114 bytes |
+
+All four use Type-ID for upgradability. The verifier-lock is standalone; the
+settlement contracts reference each other via code_hash pins in their args.
+
+### Deployment order
+
+The verifier-lock can be deployed independently. The settlement contracts have
+a dependency chain for their args construction (not for deployment itself):
+
 ```
-lock.args       = seed(4 bytes LE) ‖ claimed_commitment(32 bytes)   [36 bytes]
-witness[0].lock = the binary tape (3 bytes/tick, format v2)
-code_hash       = Type-ID args of the deployed binary
-hash_type       = "type"
+verifier-lock  (standalone)
+escrow-lock    (pins forfeit-lock + claim-lock code_hashes in args)
+forfeit-lock   (pins escrow-lock code_hash in args)
+claim-lock     (pins payout lock code_hash in args)
 ```
+
+Deploy all four first, then record the code_hashes. The pins are resolved at
+**match creation time** (when building the escrow cell args), not at deploy time.
 
 ---
 
 ## Prerequisites
 
 ```bash
-# 1. CKB CLI (already installed)
+# 1. CKB CLI
 ckb-cli --version   # must be ≥ 2.0.0
 
-# 2. Private key for a funded testnet address
-export CKB_PRIVKEY=<your 64-hex secp256k1 private key>
+# 2. Deploy key in the ckb-cli keystore
 export CKB_FROM_ADDRESS=<your testnet address — ckt1…>
 export CKB_RPC_URL=https://testnet.ckb.dev/rpc   # or your local node
 
-# Derive your testnet address from the private key:
-echo $CKB_PRIVKEY > /tmp/pk.hex
-ckb-cli util key-info --privkey-path /tmp/pk.hex
-rm /tmp/pk.hex
-
-# 3. Build the RISC-V contract binary (only needed once, or after changes)
+# 3. Build ALL four RISC-V contract binaries
 cd verifier/contract
 cargo build --release --target riscv64imac-unknown-none-elf
 cd ../..
-# Binary: verifier/contract/target/riscv64imac-unknown-none-elf/release/verifier-lock
+# Binaries in: verifier/contract/target/riscv64imac-unknown-none-elf/release/
+#   verifier-lock  escrow-lock  forfeit-lock  claim-lock
 ```
 
 ---
 
-## Step 1: Deploy the binary (Type-ID)
+## Step 1: Deploy the contracts (Type-ID)
+
+### Verifier-lock (original script)
 
 ```bash
-export CKB_PRIVKEY=<key>
-export CKB_FROM_ADDRESS=ckt1…
-export CKB_RPC_URL=https://testnet.ckb.dev/rpc
-
 npx vite-node scripts/deploy-verifier.ts
 ```
 
-The script will:
+### Settlement contracts (generalized deployer)
+
+```bash
+npx vite-node scripts/deploy-contract.ts escrow-lock
+npx vite-node scripts/deploy-contract.ts forfeit-lock
+npx vite-node scripts/deploy-contract.ts claim-lock
+```
+
+Each run will:
 1. Generate a deployment config with `enable_type_id = true`.
-2. Call `ckb-cli deploy gen-txs` to build the deploy tx.
-3. Call `ckb-cli deploy apply-txs` to broadcast it.
+2. Call `ckb-cli deploy gen-txs --sign-now` (prompts for keystore password).
+3. Call `ckb-cli deploy apply-txs` to broadcast.
 4. Print the **type_id** (code_hash) on success.
+5. Append the result to `verifier/deployment-record.json`.
 
-Record the printed `code_hash`:
+Record all four code_hashes:
 ```
-code_hash (Type-ID): 0x<64 hex chars>
+verifier-lock:  0x<64 hex>
+escrow-lock:    0x<64 hex>
+forfeit-lock:   0x<64 hex>
+claim-lock:     0x<64 hex>
 ```
 
-> If the script cannot auto-extract the type_id, check the migration directory
+> If a script cannot auto-extract the type_id, check the migration directory
 > it prints — the type script `args` field on the deployed code cell is the
 > type_id.
 
 ---
+
+## Step 1b: Verify the deployment record
+
+After all four deploys, check `verifier/deployment-record.json`:
+```bash
+cat verifier/deployment-record.json | python3 -m json.tool
+```
+
+It should contain entries for `verifierLock`, `escrowLock`, `forfeitLock`, and
+`claimLock`, each with a `codeHash` and `hashType: "type"`.
+
+---
+
+## Settlement contracts: usage overview
+
+The three settlement contracts are not spent directly by a user — they are
+composed into a match-settlement flow:
+
+1. **Match creation:** build an escrow cell locked by `escrow-lock` with
+   227-byte args embedding both players' ids, nonce commitments, the
+   forfeit-lock pin, and the claim-lock pin. Fund it with the pot.
+   See [`docs/ESCROW.md §1`](ESCROW.md#1-lock-args-227-bytes).
+
+2. **Happy path (tag 0):** both players sign a mutual payout → escrow unlocks.
+
+3. **Court path (tag 1):** full replay → pending-claim cell under `claim-lock`.
+   The claim enters a challenge window. See [`docs/CHALLENGE.md`](CHALLENGE.md).
+
+4. **Forfeit path (tag 3):** prefix replay → pending-forfeit cell under
+   `forfeit-lock`. The stalled player can ADVANCE or the claimant FINALIZEs.
+   See [`docs/FORFEIT.md`](FORFEIT.md).
+
+5. **Refund path (tag 2):** timeout → 50/50 split.
+
+All args layouts, witness formats, and error codes are documented in the
+respective protocol docs. The ckb-testtool tests
+(`verifier/contract/tests/{escrow,forfeit,claim}.rs`) exercise every path
+in-process without broadcasting.
+
+---
+
+## Verifier-lock spend runbook
+
+The remaining steps below cover the **verifier-lock** specifically: creating a
+cell locked by the verifier kernel and spending it with a valid game tape.
 
 ## Step 2: Generate a game tape and commitment
 
