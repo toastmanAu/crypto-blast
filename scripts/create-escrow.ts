@@ -27,8 +27,8 @@ const CKB = 'ckb-cli';
 const RPC = process.env['CKB_RPC_URL'] ?? 'https://testnet.ckb.dev/rpc';
 const FROM = process.env['CKB_FROM_ADDRESS'];
 
-const ESCROW_CODE_HASH = '0xd47498992e4fa6596553a6a7103445b87ca6e4a8e5b14e464b138c919ec83112';
-const CLAIM_CODE_HASH = '0xf0771028d38f88075ac2106651c6436354ddc9ae7d988dfa7a681df1ab71be72';
+const ESCROW_CODE_HASH = '0xa7a8990be100664b4773a4089277210ed718abd94470dbc75482dd6854575498';
+const CLAIM_CODE_HASH = '0x4f37bff167ff1f0a1e936037a2d265115f3c915a3d035df5329f54c104d1ce4d';
 const SIGHASH_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 // secp256k1_blake160 sighash lock cell dep (testnet dep_group)
 const SIGHASH_CELL_DEP = {

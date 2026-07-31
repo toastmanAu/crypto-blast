@@ -2,22 +2,26 @@
   "network": "testnet",
   "rpcUrl": "https://testnet.ckb.dev/rpc",
   "deployedAt": "2026-07-30",
+  "note": "codeHash values are the Type-ID script hashes (blake2b of the type script), NOT the deploy tx hashes. The deploy tx hashes are recorded in deployTxHash.",
   "verifierLock": {
-    "codeHash": "0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305",
+    "codeHash": "0x7bb3f8e614ca79773ceba7e38b49e71fe3b48b885a2e640a51db9345375fb5b3",
     "hashType": "type",
-    "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/verifier-lock"
+    "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/verifier-lock",
+    "deployTxHash": "0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305"
   },
   "escrowLock": {
-    "codeHash": "0xd47498992e4fa6596553a6a7103445b87ca6e4a8e5b14e464b138c919ec83112",
+    "codeHash": "0xa7a8990be100664b4773a4089277210ed718abd94470dbc75482dd6854575498",
     "hashType": "type",
     "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/escrow-lock",
-    "description": "Phase-4A settlement (happy/court/refund/forfeit-claim)"
+    "description": "Phase-4A settlement (happy/court/refund/forfeit-claim)",
+    "deployTxHash": "0xd47498992e4fa6596553a6a7103445b87ca6e4a8e5b14e464b138c919ec83112"
   },
   "claimLock": {
-    "codeHash": "0xf0771028d38f88075ac2106651c6436354ddc9ae7d988dfa7a681df1ab71be72",
+    "codeHash": "0x4f37bff167ff1f0a1e936037a2d265115f3c915a3d035df5329f54c104d1ce4d",
     "hashType": "type",
     "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/claim-lock",
-    "description": "Challenge window (CHALLENGE + FINALIZE)"
+    "description": "Challenge window (CHALLENGE + FINALIZE)",
+    "deployTxHash": "0xf0771028d38f88075ac2106651c6436354ddc9ae7d988dfa7a681df1ab71be72"
   },
   "forfeitLock": {
     "codeHash": null,
@@ -28,7 +32,7 @@
   "deployerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvrg5w9lw4xww4ep2v7ckqtn27dhmnzwcc6us7tq",
   "features": "movement (walk/jump/step-climb/budget), 5 munitions (bridge/gas/mine/cluster/seed), supply crates, sudden death",
   "lockScriptTemplate": {
-    "code_hash": "0xe98787dab7771bf59b700ba317b1a4f74e404e8cc4c0effc5c6865e64fa03305",
+    "code_hash": "0x7bb3f8e614ca79773ceba7e38b49e71fe3b48b885a2e640a51db9345375fb5b3",
     "hash_type": "type",
     "args": "<seed (32 bytes) ‖ commitment (32 bytes)>"
   }
