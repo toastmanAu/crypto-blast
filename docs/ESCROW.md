@@ -12,11 +12,11 @@ closes the final-move equivocation residual (§8). See
 ADVANCE / FORFEIT-FINALIZE transactions, the forfeit-lock binary, and the
 316-byte pending-forfeit args).
 
-**Proof status:** 10 ckb-testtool tests pass for the three original paths
-(in-memory CKB-VM); the tag-3 forfeit-claim path adds 5 more (see
-[`docs/FORFEIT.md`](FORFEIT.md)); the tag-1 court-claim transition adds 3 more
-(see [`docs/CHALLENGE.md`](CHALLENGE.md)). Testnet broadcast is a manual Plan-B
-step — no autonomous broadcast is made.
+**Proof status:** 19 ckb-testtool tests pass across all paths
+(in-memory CKB-VM): 10 original + 5 forfeit-claim (see
+[`docs/FORFEIT.md`](FORFEIT.md)) + 4 court-claim (see
+[`docs/CHALLENGE.md`](CHALLENGE.md)). **All four contracts deployed to testnet;
+both the court and forfeit settlement cycles proven on-chain** (see §8.1).
 Cross-reference: [`docs/COMMITMENT.md §8`](COMMITMENT.md#8-escrow-lock-phase-4a).
 
 ---
@@ -330,12 +330,44 @@ is wrong and the court/happy/refund paths will all reject valid spends.
 | Court fixture turns | 23 (synthetic self-destruct match, seed=1234, winner=player1) |
 
 > Court now verifies exactly **2 secp256k1 recoveries** (constant, independent of
-> turn count). The `~148M` figure is for the 23-turn fixture; cost is now
+> turn count). The `~179M` figure is for a 37-turn fixture; cost is
 > **replay-dominated** — it scales with match length (ticks) rather than turn
 > count. Witness envelope: `turn_count (u16 LE) ‖ [tape_len (u16 LE) ‖ tape]×n
-> ‖ sig0 (65) ‖ sig1 (65)` (~6056 bytes for the 23-turn fixture, was 7421 with
-> per-turn sigs). The dynamic-loading secp optimization is no longer the primary
-> lever; at 2 recoveries the bundled-k256 cost fits under 200M.
+> ‖ sig0 (65) ‖ sig1 (65)`. The dynamic-loading secp optimization is no longer
+> the primary lever; at 2 recoveries the bundled-k256 cost fits under 200M.
+
+### 8.1 Testnet Proof
+
+All four contracts are deployed to CKB testnet and both settlement cycles have
+been proven on-chain:
+
+**Deployed contracts** (Type-ID code_hashes):
+
+| Contract | code_hash | Deploy tx |
+|----------|-----------|-----------|
+| verifier-lock | `0x7bb3…b5b3` | `0xe987…` |
+| escrow-lock | `0xa7a8…5498` | `0xd474…` |
+| claim-lock | `0x4f37…ce4d` | `0xf077…` |
+| forfeit-lock | `0x355a…3e3f` | `0xe8a7…` |
+
+**Court settlement cycle** (escrow → court claim → pending-claim → FINALIZE):
+
+| Step | Tx hash | Block |
+|------|---------|-------|
+| Escrow cell (1000 CKB) | `0x5bc5c0f4…` | 21,929,694 |
+| Court claim (37-turn match, draw) | `0x904d1384…` | 21,929,847 |
+| FINALIZE (500 CKB each) | `0xb0a363b5…` | 21,931,313 |
+
+**Forfeit settlement cycle** (escrow → FORFEIT-CLAIM → pending-forfeit → FORFEIT-FINALIZE):
+
+| Step | Tx hash | Block |
+|------|---------|-------|
+| Escrow cell (1000 CKB, forfeit pin set) | `0x404bc871…` | 21,941,647 |
+| FORFEIT-CLAIM (5-turn prefix, player 1 stalled) | `0x4920c5e2…` | 21,941,650 |
+| FORFEIT-FINALIZE (1000 CKB to claimant) | `0x78c57e8e…` | 21,941,657 |
+
+Scripts: `scripts/create-escrow.ts`, `scripts/court-claim.ts`,
+`scripts/finalize-claim.ts`, `scripts/prove-forfeit.ts`.
 
 ### Residual — Final-Move Equivocation (CLOSED)
 
@@ -411,7 +443,7 @@ Run: `cd verifier/contract && cargo test --test escrow`
 | **FiberQuest integration (Plan B)** | TS settlement-tx builders, the verifiable-match game mode, and the wallet signing flow are OUT OF SCOPE for this plan. They are a separate Plan B step after testnet deploy. |
 | **Single-GroupInput hardening** | The contract currently uses `Source::GroupInput` for the pot calculation and witness load, which is correct for single-escrow spends. Multi-GroupInput spends (batching multiple escrow cells in one tx) are not blocked but also not tested. |
 | **Dynamic-loading secp optimization** | Switching from bundled k256 to the CKB consensus secp256k1 dynamic lib would reduce the binary size and court-path cycles significantly. Requires sourcing + deploying the prebuilt RISC-V dynamic library as a dep cell. |
-| **Testnet broadcast** | No autonomous broadcast is made. A manual runbook (analogous to `docs/VERIFIER_DEPLOY.md`) is required for testnet/mainnet deploy. |
+| **Testnet deployment** | All four contracts deployed to testnet. Both settlement cycles (court + forfeit) proven on-chain. See §8.1. |
 
 ---
 
