@@ -112,6 +112,26 @@ escrow cell (1000 CKB, 227-byte args)
 
 Both player payout cells confirmed live on-chain. Scripts: `scripts/create-escrow.ts`, `scripts/court-claim.ts`, `scripts/finalize-claim.ts`.
 
+### Testnet proof — forfeit protocol
+
+The commit-reveal forfeit path has been exercised end-to-end on CKB testnet:
+
+```
+escrow cell (1000 CKB, forfeit-lock pin set)
+  ──FORFEIT-CLAIM (escrow-lock tag 3, ~72M cycles)──▶
+    pending-forfeit cell (forfeit-lock, 357-byte args)
+      ──FORFEIT-FINALIZE (forfeit-lock tag 2, ~53K cycles)──▶
+        1000 CKB → claimant (player 0)  ✓ live
+```
+
+| Step | Tx hash | Block |
+|------|---------|-------|
+| Escrow cell created | `0x404bc871…` | 21,941,647 |
+| FORFEIT-CLAIM (5-turn prefix, player 1 stalled) | `0x4920c5e2…` | 21,941,650 |
+| FORFEIT-FINALIZE (1000 CKB to claimant) | `0x78c57e8e…` | 21,941,657 |
+
+Script: `scripts/prove-forfeit.ts`.
+
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
 ---
