@@ -10,7 +10,7 @@ directly but transitions the pot into a *pending-forfeit cell* locked by a separ
 closes the final-move equivocation residual (§8). See
 [`docs/FORFEIT.md`](FORFEIT.md) for the full forfeit protocol (the FORFEIT-CLAIM /
 ADVANCE / FORFEIT-FINALIZE transactions, the forfeit-lock binary, and the
-316-byte pending-forfeit args).
+357-byte pending-forfeit args).
 
 **Proof status:** 19 ckb-testtool tests pass across all paths
 (in-memory CKB-VM): 10 original + 5 forfeit-claim (see
@@ -164,7 +164,7 @@ re-derive the posted head (`E_FORFEIT_PREFIX`), confirms the match is still in
 progress (`E_FORFEIT_MATCH_OVER`) and that both head signatures recover to exactly
 `{player0, player1}` (`E_FORFEIT_MUTUAL`), then **transitions the pot into a
 pending-forfeit cell** locked by the pinned forfeit-lock (`E_FORFEIT_OUTPUT`) — a
-316-byte args blob (§1, [`docs/FORFEIT.md §5`](FORFEIT.md#5-the-two-args-layouts-as-built)).
+357-byte args blob (§1, [`docs/FORFEIT.md §5`](FORFEIT.md#5-the-two-args-layouts-as-built)).
 
 This path does **not** pay out: settlement continues on the separate
 **forfeit-lock binary** ([`verifier/contract/src/forfeit.rs`](../verifier/contract/src/forfeit.rs)),
@@ -244,8 +244,8 @@ secp256k1 library.
 - `k256` is self-contained no_std + alloc, compiles cleanly for
   `riscv64imac-unknown-none-elf` with `-C target-feature=-a,+forced-atomics` and
   the dummy-atomic allocator already established by the verifier-lock contract.
-- **Trade-off:** larger binary (~340 KB vs ~188 KB verifier-lock) and higher
-  court-path cycles (~148M vs ~54M for the tape-only path) from pure-Rust scalar
+- **Trade-off:** larger binary (~366 KB vs ~207 KB verifier-lock) and higher
+  court-path cycles (~179M vs ~54M for the tape-only path) from pure-Rust scalar
   multiplication without precomputed tables. Acceptable for correctness and
   testability; at 2 recoveries (interleaved-chain court) this is now under the
   200M mainnet ceiling, so dynamic-loading is no longer an urgent optimization.
@@ -414,7 +414,7 @@ follow-up spec. This spec does **not** claim the court path is fully theft-proof
 
 ---
 
-## 9. ckb-testtool Gate (10/10 PASS)
+## 9. ckb-testtool Gate (19/19 PASS)
 
 All tests in `verifier/contract/tests/escrow.rs`:
 
@@ -452,7 +452,7 @@ Run: `cd verifier/contract && cargo test --test escrow`
 | Code | Constant | Meaning |
 |------|----------|---------|
 | 1 | `E_LOAD_SCRIPT` | syscall failure loading the lock script |
-| 2 | `E_ARGS_LEN` | `lock.args` not exactly 186 bytes |
+| 2 | `E_ARGS_LEN` | `lock.args` not exactly 227 bytes |
 | 3 | `E_LOAD_WITNESS` | syscall failure loading witness |
 | 4 | `E_WITNESS_LOCK_MISSING` | `witness[0].lock` absent |
 | 5 | `E_UNSUPPORTED_TAG` | tag byte not 0, 1, 2, or 3 |

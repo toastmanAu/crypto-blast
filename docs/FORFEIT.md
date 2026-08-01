@@ -182,9 +182,9 @@ they post makes it their *own* turn, not the opponent's.
 
 ## 5. The Two Args Layouts (as-built)
 
-### 5.1 Escrow `lock.args` — 186 bytes (was 145 in 4A)
+### 5.1 Escrow `lock.args` — 227 bytes (was 145 in 4A)
 
-The Phase-4A layout ([`docs/ESCROW.md §1`](ESCROW.md#1-lock-args-186-bytes))
+The Phase-4A layout ([`docs/ESCROW.md §1`](ESCROW.md#1-lock-args-227-bytes))
 **plus** a `reveal_window` and a forfeit-lock pin appended at the end:
 ```
 [0..32]    expected_payout_code_hash
@@ -197,27 +197,30 @@ The Phase-4A layout ([`docs/ESCROW.md §1`](ESCROW.md#1-lock-args-186-bytes))
 [145..153] reveal_window (8, LE u64)          ← NEW (forfeit path only)
 [153..185] forfeit_lock_code_hash (32)        ← NEW (PIN)
 [185]      forfeit_lock_hash_type (1)         ← NEW
-= 186 bytes
+[186..194] challenge_window (8, LE u64)       ← challenge window (court path only)
+[194..226] claim_lock_code_hash (32)          ← claim-lock PIN (court path only)
+[226]      claim_lock_hash_type (1)           ← challenge window
+= 227 bytes
 ```
 The court / happy / refund paths **ignore the new fields** — they parse the same
 first 145 bytes as before. Only the tag-3 forfeit-claim branch reads
 `reveal_window` (`args[145..153]`) and the forfeit-lock pin (`args[153..186]`).
 
-### 5.2 Pending-forfeit cell `lock.args` — 316 bytes
+### 5.2 Pending-forfeit cell `lock.args` — 357 bytes
 
 ```
 [0..32]    escrow_code_hash       ← escrow-lock's OWN code_hash (PIN for ADVANCE)
 [32]       escrow_hash_type       ← escrow-lock's OWN hash_type
-[33..219]  escrow_args (186)      ← ORIGINAL escrow lock.args, VERBATIM
-[219..239] claimant_id (20)
-[239..243] stalled_idx (4, LE u32) ← prefix_tapes.len()
-[243..275] head_k (32)            ← mutually-signed last completed head
-[275..307] committed_head (32)    ← 32 zero bytes when has_commit == 0
-[307]      has_commit (1)         ← 1 = shape 1, 0 = shape 2
-[308..316] forfeit_deadline (8, LE u64) ← claim_since + reveal_window
-= 316 bytes
+[33..260]  escrow_args (227)      ← ORIGINAL escrow lock.args, VERBATIM
+[260..280] claimant_id (20)
+[280..284] stalled_idx (4, LE u32) ← prefix_tapes.len()
+[284..316] head_k (32)            ← mutually-signed last completed head
+[316..348] committed_head (32)    ← 32 zero bytes when has_commit == 0
+[348]      has_commit (1)         ← 1 = shape 1, 0 = shape 2
+[349..357] forfeit_deadline (8, LE u64) ← claim_since + reveal_window
+= 357 bytes
 ```
-The **verbatim escrow args** (`[33..219]`) let ADVANCE re-emit the escrow cell
+The **verbatim escrow args** (`[33..260]`) let ADVANCE re-emit the escrow cell
 byte-for-byte — this pins the escrow → forfeit → escrow round-trip (§7). The
 escrow-lock's **own identity** (`[0..33]`, read via `load_script()` at claim time)
 is the pin ADVANCE checks its output against.
@@ -225,7 +228,7 @@ is the pin ADVANCE checks its output against.
 > **Superseded sketch:** the design spec
 > ([`docs/superpowers/specs/2026-06-29-commit-reveal-forfeit-design.md`](superpowers/specs/2026-06-29-commit-reveal-forfeit-design.md))
 > sketched a ~170-byte pending-forfeit layout. That sketch is **superseded** by the
-> as-built 316-byte layout above, which additionally embeds the escrow-lock's own
+> as-built 357-byte layout above, which additionally embeds the escrow-lock's own
 > code_hash + hash_type and the full verbatim escrow args so ADVANCE can reconstruct
 > the escrow cell byte-exactly.
 
@@ -260,11 +263,11 @@ lock they control:
 
 1. **escrow → forfeit:** the FORFEIT-CLAIM output cell's lock must match the
    forfeit pin in the escrow `args[153..186]` — `code_hash == args[153..185]`,
-   `hash_type == args[185]`, **and** `args == expected` (the 316-byte blob,
+   `hash_type == args[185]`, **and** `args == expected` (the 357-byte blob,
    byte-exact, length-checked). (`E_FORFEIT_OUTPUT`.)
 2. **forfeit → escrow:** the ADVANCE output must match the escrow pin in the
    pending-forfeit `args[0..33]` — `code_hash == args[0..32]`, `hash_type ==
-   args[32]`, **and** `lock.args == args[33..219]` (the verbatim 186-byte escrow
+   args[32]`, **and** `lock.args == args[33..260]` (the verbatim 227-byte escrow
    args). (`E_FF_ADVANCE_OUTPUT`.)
 3. **payout:** FORFEIT-FINALIZE pays under the payout pin **embedded in the escrow
    args** (`escrow_args[0..32]` code_hash + `escrow_args[32]` hash_type + the
@@ -385,7 +388,7 @@ Appended after the Phase-4A codes ([`docs/ESCROW.md §11`](ESCROW.md#11-error-co
 | Code | Constant | Meaning |
 |------|----------|---------|
 | 1 | `E_FF_LOAD_SCRIPT` | syscall failure loading the lock script |
-| 2 | `E_FF_ARGS_LEN` | `lock.args` not exactly 316 bytes (or fixed-field parse failure) |
+| 2 | `E_FF_ARGS_LEN` | `lock.args` not exactly 357 bytes (or fixed-field parse failure) |
 | 3 | `E_FF_LOAD_WITNESS` | syscall failure loading witness |
 | 4 | `E_FF_WITNESS_LOCK_MISSING` | `witness[0].lock` absent |
 | 5 | `E_FF_UNSUPPORTED_TAG` | tag byte not 1 or 2 |

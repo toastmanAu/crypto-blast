@@ -179,9 +179,9 @@ reduce the blake2b cost that currently dominates the cycle count).
 Phase 4A adds a 2-player match-settlement escrow-lock that holds both players'
 stakes and pays the real winner via one of three spend paths. See
 [`docs/ESCROW.md`](ESCROW.md) for the full protocol specification including:
-the 145-byte `lock.args` layout, the 3 spend paths (happy/court/refund) with
+the 227-byte `lock.args` layout, the 4 spend paths (happy/court/refund/forfeit-claim) with
 their witness formats, the attestation envelope, the seed commit-reveal, the
-prize-theft fix (code_hash + hash_type pinning), the ckb-testtool gate (10/10),
+prize-theft fix (code_hash + hash_type pinning), the ckb-testtool gate (19/19),
 and the builder requirements (separate fee input, canonical payout lock pin).
 
 **Phase 4A metrics (as-built):**
