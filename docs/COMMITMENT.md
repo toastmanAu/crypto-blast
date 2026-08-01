@@ -185,22 +185,26 @@ prize-theft fix (code_hash + hash_type pinning), the ckb-testtool gate (10/10),
 and the builder requirements (separate fee input, canonical payout lock pin).
 
 **Phase 4A metrics (as-built):**
-- escrow-lock binary: 348,288 bytes (~340 KB, `riscv64imac-unknown-none-elf` release)
-- Court-path cycles: 148,309,757 (~148M) for a 23-turn fixture (interleaved-chain
-  court, **2 recoveries** constant in turn count; ~1.35× under the 200M ceiling)
-  - Envelope: `turn_count ‖ [tape_len‖tape]×n ‖ sig0(65) ‖ sig1(65)` (~6056 bytes,
-    was 7421 with per-turn sigs)
+- escrow-lock binary: 374,968 bytes (~366 KB, `riscv64imac-unknown-none-elf` release)
+- Court-path cycles: 179,366,690 (~179M) for a 37-turn fixture (interleaved-chain
+  court, **2 recoveries** constant in turn count; under the 200M ceiling)
+  - Court now transitions to a **pending-claim cell** (challenge window) instead
+    of paying the winner directly. See [`docs/CHALLENGE.md`](CHALLENGE.md).
+  - Envelope: `turn_count ‖ [tape_len‖tape]×n ‖ sig0(65) ‖ sig1(65)`
   - Cost is replay-dominated; scales with match length (ticks), not turn count
-- ckb-testtool: 10/10 escrow + 3/3 verify tests PASS
+- Escrow args: **227 bytes** (was 186; +`challenge_window` +claim-lock pin)
+- ckb-testtool: 19/19 escrow + 8/8 claim + 7/7 forfeit + 4/4 verify tests PASS
 - secp: bundled k256 (no dynamic-loading; no `secp256k1_data` dep cell required)
-- Testnet broadcast: manual Plan-B step (not yet performed)
+- **Deployed to testnet:** escrow-lock `0xa7a8…5498`, claim-lock `0x4f37…ce4d`,
+  forfeit-lock `0x355a…3e3f`. Both settlement cycles (court + forfeit) proven
+  on-chain. See [`docs/ESCROW.md §8.1`](ESCROW.md#81-testnet-proof).
 
 **Phase 4 — forfeit protocol (commit-reveal move binding).** Phase 4 adds a
 tag-3 FORFEIT-CLAIM path to the escrow-lock plus a separate `forfeit-lock` binary
 (ADVANCE + FORFEIT-FINALIZE) that closes the court path's final-move equivocation
 residual at play-time. See [`docs/FORFEIT.md`](FORFEIT.md) for the full protocol
-(the per-turn COMMIT/ACK/REVEAL exchange, both stall shapes, the 186-byte escrow +
-316-byte pending-forfeit args layouts, and the cross-cell pins).
+(the per-turn COMMIT/ACK/REVEAL exchange, both stall shapes, the 227-byte escrow +
+357-byte pending-forfeit args layouts, and the cross-cell pins).
 
 Measured cycle counts (ckb-testtool, as-built; all under the 200M ceiling):
 
@@ -289,7 +293,7 @@ verbatim from the Phase-1 `verifier` lib (no_std, `libm` floor/ceil/sqrt,
 
 | Metric | Value |
 |--------|-------|
-| Contract binary (`riscv64imac-unknown-none-elf`, release) | 191,872 bytes (**~187 KB**) |
+| Contract binary (`riscv64imac-unknown-none-elf`, release) | 212,256 bytes (**~207 KB**) |
 | Full-match verify cycles in-VM (ckb-testtool `accepts_valid_tape`) | **54,070,560** (~54 M) |
 | Cycle budget ceiling (`verify_tx` limit) | 200,000,000 (~3.7× headroom) |
 | On-chain tape — largest fixture (`tape-turnloop.bin`, 1084 ticks) | 2,168 bytes (~2 KB) |
@@ -302,10 +306,10 @@ disabled as a workaround for the CKB-VM single-hart ISA atomics constraint.
 
 ### Proof status
 
-- **ckb-testtool (in-memory CKB-VM simulation):** `accepts_valid_tape` PASS,
-  `rejects_forged_commitment` PASS, `rejects_wrong_seed` PASS.
-  See `verifier/contract/tests/verify.rs`.
-- **Testnet broadcast:** manual runbook only — the automated tooling builds and
-  dry-runs the transactions, but no broadcast is made without a human supplying
-  `CKB_PRIVKEY`. See [`docs/VERIFIER_DEPLOY.md`](VERIFIER_DEPLOY.md) for the
-  step-by-step testnet procedure.
+- **ckb-testtool (in-memory CKB-VM simulation):** 38 contract tests PASS
+  (4 verify + 19 escrow + 8 claim + 7 forfeit). See `verifier/contract/tests/`.
+- **Testnet deployment:** all four contracts deployed (verifier-lock `0x7bb3…b5b3`,
+  escrow-lock `0xa7a8…5498`, claim-lock `0x4f37…ce4d`, forfeit-lock `0x355a…3e3f`).
+  Both settlement cycles proven on-chain — see
+  [`docs/ESCROW.md §8.1`](ESCROW.md#81-testnet-proof).
+  Deploy runbook: [`docs/VERIFIER_DEPLOY.md`](VERIFIER_DEPLOY.md).
