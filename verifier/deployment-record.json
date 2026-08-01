@@ -24,10 +24,11 @@
     "deployTxHash": "0xf0771028d38f88075ac2106651c6436354ddc9ae7d988dfa7a681df1ab71be72"
   },
   "forfeitLock": {
-    "codeHash": null,
+    "codeHash": "0x355a3bcae56d0ebf583333af2b3c6420183b1efefca0238d411f349088e83e3f",
     "hashType": "type",
     "binary": "verifier/contract/target/riscv64imac-unknown-none-elf/release/forfeit-lock",
-    "description": "Phase-4B forfeit (ADVANCE + FORFEIT-FINALIZE) — NOT YET DEPLOYED (faucet-blocked)"
+    "description": "Phase-4B forfeit (ADVANCE + FORFEIT-FINALIZE)",
+    "deployTxHash": "0xe8a7045516963ab2cabf9bee168a2e65fd6739ccd38596dda77686af08a9516b"
   },
   "deployerAddress": "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvrg5w9lw4xww4ep2v7ckqtn27dhmnzwcc6us7tq",
   "features": "movement (walk/jump/step-climb/budget), 5 munitions (bridge/gas/mine/cluster/seed), supply crates, sudden death",
