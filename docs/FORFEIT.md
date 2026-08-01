@@ -362,7 +362,7 @@ surface.
 - **N-player brackets.**
 
 This mirrors the 4A boundary: on-chain primitives proven via ckb-testtool;
-networked integration deferred to FiberQuest (Phase 4B).
+networked integration deferred to FiberQuest (Phase 4B — deferred indefinitely).
 
 ---
 

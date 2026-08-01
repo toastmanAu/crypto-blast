@@ -6,8 +6,9 @@ equivocation residual** — a loser re-authoring their final move to steal the
 pot — by making the court claim enter a **challenge window** before paying out.
 
 **Proof status:** 8 claim-lock ckb-testtool tests + 19 escrow tests (including
-3 court-claim tests) pass under ckb-testtool (in-memory CKB-VM). Testnet
-broadcast remains a manual step.
+3 court-claim tests) pass under ckb-testtool (in-memory CKB-VM). **Claim-lock
+deployed to testnet** (`0x4f37…ce4d`); court settlement cycle proven on-chain
+(see [`docs/ESCROW.md §8.1`](ESCROW.md#81-testnet-proof)).
 Cross-references: [`docs/ESCROW.md`](ESCROW.md) (the escrow-lock this modifies),
 [`docs/FORFEIT.md`](FORFEIT.md) (the play-time binding companion).
 

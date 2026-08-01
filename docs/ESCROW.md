@@ -440,7 +440,7 @@ Run: `cd verifier/contract && cargo test --test escrow`
 | Item | Notes |
 |------|-------|
 | **Abandonment-forfeit path** | A path where one player never submits their nonce (or goes offline before signing). Not implemented; the refund path (tag=2) covers the timeout case. A dedicated forfeit path would allow faster recovery. |
-| **FiberQuest integration (Plan B)** | TS settlement-tx builders, the verifiable-match game mode, and the wallet signing flow are OUT OF SCOPE for this plan. They are a separate Plan B step after testnet deploy. |
+| **FiberQuest integration** | TS settlement-tx builders, the verifiable-match game mode, and the wallet signing flow are OUT OF SCOPE. FiberQuest Phase 4B is deferred indefinitely. |
 | **Single-GroupInput hardening** | The contract currently uses `Source::GroupInput` for the pot calculation and witness load, which is correct for single-escrow spends. Multi-GroupInput spends (batching multiple escrow cells in one tx) are not blocked but also not tested. |
 | **Dynamic-loading secp optimization** | Switching from bundled k256 to the CKB consensus secp256k1 dynamic lib would reduce the binary size and court-path cycles significantly. Requires sourcing + deploying the prebuilt RISC-V dynamic library as a dep cell. |
 | **Testnet deployment** | All four contracts deployed to testnet. Both settlement cycles (court + forfeit) proven on-chain. See §8.1. |
