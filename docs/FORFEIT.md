@@ -7,8 +7,8 @@ move — by binding each move *when it is played* and forcing a stall to resolve
 on-chain as reveal-or-forfeit.
 
 **Proof status:** 5 escrow forfeit-claim tests + 7 forfeit-lock tests pass under
-ckb-testtool (in-memory CKB-VM). Testnet broadcast remains a manual Plan-B step —
-no autonomous broadcast is made.
+ckb-testtool (in-memory CKB-VM). **Proven on testnet** — full FORFEIT-CLAIM →
+FORFEIT-FINALIZE cycle committed on-chain (see §8.1).
 Cross-references: [`docs/ESCROW.md`](ESCROW.md) (the escrow-lock this builds on),
 [`docs/COMMITMENT.md §8`](COMMITMENT.md#8-escrow-lock-phase-4a) (Phase-4A metrics).
 
@@ -247,6 +247,8 @@ while the replay-heavy work stays in the escrow-lock's FORFEIT-CLAIM branch (whi
 reuses the 4A replay machinery).
 
 Binary size (`riscv64imac-unknown-none-elf`, release): **300,128 bytes (~293 KB)**.
+Testnet deployment: code_hash `0x355a3bcae56d0ebf583333af2b3c6420183b1efefca0238d411f349088e83e3f`
+(deploy tx `0xe8a7045516963ab2cabf9bee168a2e65fd6739ccd38596dda77686af08a9516b`).
 
 ---
 
@@ -278,7 +280,7 @@ lock they control:
 | ADVANCE (shape 1) | **6,223,106** (~6.2M) | one chain fold + one recovery, no replay |
 | ADVANCE (shape 2) | **6,225,445** (~6.2M) | ditto |
 | FORFEIT-FINALIZE | **52,545** (~52.5K) | payout check only (no replay, no recovery) |
-| (court, for context) | **148,311,140** (~148M) | full 23-turn replay + 2 recoveries |
+| (court, for context) | **179,366,690** (~179M) | full 37-turn replay + 2 recoveries + claim transition |
 
 All well under the **200M** per-tx ceiling.
 
@@ -287,6 +289,30 @@ All well under the **200M** per-tx ceiling.
 > match length. This is the **Phase-4B match-duration item** (the same lever already
 > noted for court): a longer match could push the prefix replay toward the 200M
 > ceiling.
+
+### 8.1 Testnet Proof
+
+The full forfeit protocol has been exercised end-to-end on CKB testnet:
+
+```
+escrow cell (1000 CKB, forfeit-lock pin = 0x355a…3e3f)
+  ──FORFEIT-CLAIM (escrow-lock tag 3, shape 2)──▶
+    pending-forfeit cell (forfeit-lock, 357-byte args)
+      ──FORFEIT-FINALIZE (forfeit-lock tag 2)──▶
+        1000 CKB → claimant (player 0)
+```
+
+| Step | Tx hash | Block |
+|------|---------|-------|
+| Escrow cell created | `0x404bc871…` | 21,941,647 |
+| FORFEIT-CLAIM (5-turn prefix, player 1 stalled) | `0x4920c5e2…` | 21,941,650 |
+| FORFEIT-FINALIZE (1000 CKB to claimant) | `0x78c57e8e…` | 21,941,657 |
+
+Deployed contracts:
+- escrow-lock: `0xa7a8990be100664b4773a4089277210ed718abd94470dbc75482dd6854575498`
+- forfeit-lock: `0x355a3bcae56d0ebf583333af2b3c6420183b1efefca0238d411f349088e83e3f`
+
+Script: `scripts/prove-forfeit.ts`.
 
 ---
 
