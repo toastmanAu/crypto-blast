@@ -37,6 +37,28 @@ claim-lock     (pins payout lock code_hash in args)
 Deploy all four first, then record the code_hashes. The pins are resolved at
 **match creation time** (when building the escrow cell args), not at deploy time.
 
+### Deployed contracts (testnet, 2026-07-30 – 2026-08-02)
+
+| Contract | code_hash (Type-ID script hash) | Deploy tx | Binary size |
+|----------|--------------------------------|-----------|-------------|
+| verifier-lock | `0x7bb3f8e614ca79773ceba7e38b49e71fe3b48b885a2e640a51db9345375fb5b3` | `0xe98787da…` | 212,256 B (~207 KB) |
+| escrow-lock | `0xa7a8990be100664b4773a4089277210ed718abd94470dbc75482dd6854575498` | `0xd4749899…` | 374,968 B (~366 KB) |
+| forfeit-lock | `0x355a3bcae56d0ebf583333af2b3c6420183b1efefca0238d411f349088e83e3f` | `0xe8a70455…` | 300,128 B (~293 KB) |
+| claim-lock | `0x4f37bff167ff1f0a1e936037a2d265115f3c915a3d035df5329f54c104d1ce4d` | `0xf0771028…` | 301,912 B (~295 KB) |
+
+> **Important:** the `code_hash` is the **Type-ID script hash**
+> (`blake2b(molecule(type_script))`), NOT the deploy tx hash. The deploy script
+> may print the tx hash — compute the real code_hash with:
+> ```bash
+> node -e "const { utils } = require('@ckb-lumos/lumos'); \
+>   console.log(utils.computeScriptHash({ codeHash: '0x0000…545950455f4944', \
+>   hashType: 'type', args: '<type_script_args_from_deployed_cell>' }))"
+> ```
+> Or query the deployed cell's type script args via `get_live_cell` RPC.
+
+Both settlement cycles have been proven on-chain — see
+[`docs/ESCROW.md §8.1`](ESCROW.md#81-testnet-proof).
+
 ---
 
 ## Prerequisites
@@ -133,6 +155,16 @@ All args layouts, witness formats, and error codes are documented in the
 respective protocol docs. The ckb-testtool tests
 (`verifier/contract/tests/{escrow,forfeit,claim}.rs`) exercise every path
 in-process without broadcasting.
+
+### Testnet proof scripts
+
+| Script | What it does |
+|--------|-------------|
+| `scripts/create-escrow.ts` | Creates an escrow cell with 227-byte args |
+| `scripts/court-claim.ts` | Generates a match, submits court claim (tag 1) → pending-claim cell |
+| `scripts/finalize-claim.ts` | Finalizes a pending-claim cell (tag 4) → payout |
+| `scripts/prove-forfeit.ts` | Full forfeit cycle: escrow → FORFEIT-CLAIM (tag 3) → FORFEIT-FINALIZE (tag 2) |
+| `scripts/sign-and-send.mjs` | Lumos-based tx signer for custom lock scripts |
 
 ---
 
