@@ -49,6 +49,17 @@ type ApeAnim = 'idle' | 'walk' | 'air' | 'hurt' | 'victory';
 // Fixed for now; later the match seed comes from the lobby / chain.
 const MATCH_SEED = 1234;
 
+// Aim overlay (aim.png): the quarter-circle's right-angle pivot sits at the
+// bottom-right corner of the art. Displayed size + the pivot offset from center.
+const AIM_OVERLAY_W = 90;
+const AIM_OVERLAY_H = 88;
+
+// Wind gauge mapping: the sim's wind is in [-MAX_WIND, +MAX_WIND] px/s².
+// The analog needle deflects up to WIND_NEEDLE_MAX_RAD from vertical.
+const WIND_GAUGE_MAX = 220;                 // must match sim MAX_WIND
+const WIND_NEEDLE_MAX_RAD = Math.PI / 3;    // ±60° deflection at full wind
+const WIND_NEEDLE_LEN = 38;                 // px length of the drawn needle
+
 /** Raw input sampled per frame; edges are latched until a tick consumes them. */
 interface FrameInput {
   aimUp: boolean;
@@ -106,7 +117,6 @@ export class GameScene extends Phaser.Scene {
   private aimOverlay!: Phaser.GameObjects.Image;     // aim.png quarter-circle above the ape
   private aimNeedle!: Phaser.GameObjects.Graphics;   // rotating aim-direction indicator
   private aimLine!: Phaser.GameObjects.Line;
-  private powerMeterBg!: Phaser.GameObjects.Image;   // powerMeter.png background
   private powerMeterFill!: Phaser.GameObjects.Rectangle; // fill bar inside the meter
   private windMeterBg!: Phaser.GameObjects.Image;    // windMeter.png background
   private windNeedle!: Phaser.GameObjects.Graphics;  // wind direction/strength indicator
@@ -242,12 +252,13 @@ export class GameScene extends Phaser.Scene {
 
     // Quarter-circle aim overlay above the active ape + a rotating needle.
     // Shown only while AIMING; the overlay gives the 90° range context and the
-    // needle points along the current aim angle.
+    // needle points along the current aim angle. Depth above the apes so it
+    // always reads in front.
     this.aimOverlay = this.add.image(0, 0, 'aimOverlay')
-      .setDisplaySize(90, 88)
+      .setDisplaySize(AIM_OVERLAY_W, AIM_OVERLAY_H)
       .setVisible(false)
-      .setDepth(4);
-    this.aimNeedle = this.add.graphics().setDepth(4);
+      .setDepth(6);
+    this.aimNeedle = this.add.graphics().setDepth(6);
 
     for (let i = 0; i < this.world.apes.length; i++) {
       this.healthBars.push(this.add.rectangle(0, 0, APE_WIDTH, 4, 0x44ff66).setOrigin(0, 0.5).setDepth(4));
@@ -265,15 +276,29 @@ export class GameScene extends Phaser.Scene {
 
     this.aimLine = this.add.line(0, 0, 0, 0, 0, 0, 0xffdd33).setOrigin(0, 0).setLineWidth(2);
 
-    // Power meter (vertical bar, right side). The fill grows upward with charge.
+    // Power meter (vertical bar, right side). The fill grows upward with charge,
+    // clipped to the meter's inner track by a geometry mask so it reads as a
+    // liquid filling the gauge rather than a bar behind it.
     const pmX = GAME_WIDTH - 40;
     const pmY = GAME_HEIGHT - 140;
-    this.powerMeterBg = this.add.image(pmX, pmY, 'powerMeter').setDisplaySize(36, 210).setDepth(8);
-    this.powerMeterFill = this.add.rectangle(pmX, pmY + 96, 22, 0, 0xff5544).setOrigin(0.5, 1).setDepth(8);
+    const PM_W = 36, PM_H = 210;
+    this.add.image(pmX, pmY, 'powerMeter').setDisplaySize(PM_W, PM_H).setDepth(8);
+    // Inner track bounds (relative to the displayed meter's top-left corner).
+    const trackLeft = pmX - PM_W / 2 + 5;
+    const trackTop = pmY - PM_H / 2 + 6;
+    const trackW = 24;
+    const trackH = 195;
+    this.powerMeterFill = this.add.rectangle(
+      trackLeft + trackW / 2, trackTop + trackH, trackW, 0, 0xff5544,
+    ).setOrigin(0.5, 1).setDepth(8);
+    const pmMaskGfx = this.make.graphics({});
+    pmMaskGfx.fillRect(trackLeft, trackTop, trackW, trackH);
+    this.powerMeterFill.setMask(pmMaskGfx.createGeometryMask());
 
-    // Wind meter (top-right). The needle shows wind direction + strength.
+    // Wind meter (top-right): an analog needle over the gauge face. The needle
+    // rotates about the gauge centre, mapping wind [-MAX, +MAX] onto a ±60° sweep.
     this.windMeterBg = this.add.image(GAME_WIDTH - 80, 80, 'windMeter').setDisplaySize(100, 100).setDepth(8);
-    this.windNeedle = this.add.graphics().setDepth(8);
+    this.windNeedle = this.add.graphics().setDepth(9);
 
     this.hud = this.add.text(20, 16, '', { color: '#ffffff', fontSize: '16px' });
 
@@ -580,31 +605,45 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Quarter-circle aim overlay above the active ape + a needle along the aim.
+    // The quarter-circle's right-angle pivot corner sits just above the ape's
+    // head; the art flips sides automatically with the facing direction so the
+    // arc always opens into the half-plane the ape is aiming into.
     this.aimOverlay.setVisible(showMarker);
     this.aimNeedle.setVisible(showMarker);
     if (showMarker) {
       const ax = lerp(active.prevX, active.x, alpha);
       const ay = lerp(active.prevY, active.y, alpha);
       const angle = aimAngle(w.aim); // math angle, y-up
-      // Overlay sits above the ape's head; flip it to match the facing side.
-      const oy = ay - APE_HEIGHT * 0.75;
-      this.aimOverlay.setPosition(ax, oy);
-      this.aimOverlay.setFlipX(w.aim.facing < 0);
+      const facingRight = w.aim.facing >= 0;
 
-      // Needle: a line from the overlay center pointing along the aim angle.
+      // Pivot corner (right-angle join of the quarter circle) just above the head.
+      const pivotX = ax;
+      const pivotY = ay - APE_HEIGHT / 2 - 6;
+
+      // The pivot is at the bottom-right of the art when facing left (no flip)
+      // and bottom-right-of-flipped-art = bottom-left visually when facing right.
+      // Place the image centre so the pivot corner lands at (pivotX, pivotY).
+      const halfW = AIM_OVERLAY_W / 2;
+      const halfH = AIM_OVERLAY_H / 2;
+      this.aimOverlay.setFlipX(facingRight);
+      this.aimOverlay.setPosition(
+        facingRight ? pivotX + halfW : pivotX - halfW,
+        pivotY - halfH,
+      );
+
+      // Needle anchored at the pivot corner, pointing along the aim angle.
       // Screen y is down, so the aim direction in screen space is (cos, -sin).
       const nx = Math.cos(angle);
       const ny = -Math.sin(angle);
-      const needleLen = 40;
+      const needleLen = 42;
       this.aimNeedle.clear();
       this.aimNeedle.lineStyle(3, 0xffdd33, 1);
       this.aimNeedle.beginPath();
-      this.aimNeedle.moveTo(ax, oy);
-      this.aimNeedle.lineTo(ax + nx * needleLen, oy + ny * needleLen);
+      this.aimNeedle.moveTo(pivotX, pivotY);
+      this.aimNeedle.lineTo(pivotX + nx * needleLen, pivotY + ny * needleLen);
       this.aimNeedle.strokePath();
-      // Small arrowhead dot at the tip.
       this.aimNeedle.fillStyle(0xffdd33, 1);
-      this.aimNeedle.fillCircle(ax + nx * needleLen, oy + ny * needleLen, 4);
+      this.aimNeedle.fillCircle(pivotX + nx * needleLen, pivotY + ny * needleLen, 4);
     }
 
     // Rising edge of the shot = it just launched → muzzle flash at the barrel.
@@ -657,34 +696,36 @@ export class GameScene extends Phaser.Scene {
       this.waterSurface.y = w.waterLevel - 1;
     }
 
-    // Power meter fill: grows upward from the meter's base with charge level.
-    // The fill rect is anchored at the bottom (origin 0.5, 1) and sits inside
-    // the powerMeter.png frame. Max fill height ≈ 192px (inside the 210px frame).
-    this.powerMeterFill.x = this.powerMeterBg.x;
-    this.powerMeterFill.height = w.aim.power * 192;
+    // Power meter fill: grows upward from the track's base with charge level.
+    // Clipped to the inner track by the geometry mask set up in create().
+    this.powerMeterFill.height = w.aim.power * 195;
 
-    // Wind needle: points along the wind direction, length scales with strength.
-    // Wind is horizontal: positive = blowing right (+x), negative = left.
+    // Wind gauge: an analog needle rotating about the gauge centre. Wind
+    // [-WIND_GAUGE_MAX, +WIND_GAUGE_MAX] maps onto a ±WIND_NEEDLE_MAX_RAD sweep
+    // either side of vertical (0 wind = needle straight up).
     this.windNeedle.clear();
     const windX = this.windMeterBg.x;
     const windY = this.windMeterBg.y;
-    const windMag = Math.min(Math.abs(w.wind) / 60, 1); // normalize to [0,1]
-    const windDir = w.wind >= 0 ? 1 : -1;
-    if (windMag > 0.02) {
-      const needleLen = windMag * 34;
-      this.windNeedle.lineStyle(4, 0x66ccff, 1);
-      this.windNeedle.beginPath();
-      this.windNeedle.moveTo(windX, windY);
-      this.windNeedle.lineTo(windX + windDir * needleLen, windY);
-      this.windNeedle.strokePath();
-      // Arrowhead.
-      this.windNeedle.fillStyle(0x66ccff, 1);
-      this.windNeedle.fillTriangle(
-        windX + windDir * needleLen, windY - 6,
-        windX + windDir * needleLen, windY + 6,
-        windX + windDir * (needleLen + 8), windY,
-      );
-    }
+    const clamped = Math.max(-WIND_GAUGE_MAX, Math.min(WIND_GAUGE_MAX, w.wind));
+    const deflection = (clamped / WIND_GAUGE_MAX) * WIND_NEEDLE_MAX_RAD;
+    // Needle direction: 0 = up; positive deflection swings toward +x (right).
+    const ndx = Math.sin(deflection);
+    const ndy = -Math.cos(deflection);
+    // Hub disc covers the pre-drawn needle's pivot.
+    this.windNeedle.fillStyle(0x222831, 1);
+    this.windNeedle.fillCircle(windX, windY, 7);
+    // Needle shaft.
+    this.windNeedle.lineStyle(4, 0xffaa33, 1);
+    this.windNeedle.beginPath();
+    this.windNeedle.moveTo(windX, windY);
+    this.windNeedle.lineTo(windX + ndx * WIND_NEEDLE_LEN, windY + ndy * WIND_NEEDLE_LEN);
+    this.windNeedle.strokePath();
+    // Needle tip.
+    this.windNeedle.fillStyle(0xffaa33, 1);
+    this.windNeedle.fillCircle(windX + ndx * WIND_NEEDLE_LEN, windY + ndy * WIND_NEEDLE_LEN, 4);
+    // Centre cap over the shaft base.
+    this.windNeedle.fillStyle(0xffaa33, 1);
+    this.windNeedle.fillCircle(windX, windY, 3);
 
     this.aimLine.setVisible(showMarker);
     if (showMarker) this.drawAim();
