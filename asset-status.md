@@ -17,7 +17,8 @@ Displayed on the title screen (`BootScene`). Game rebranded to **Ape Blast**.
   active ape (replaces the old `apeAimArm` shoulder overlay). A rotating needle
   indicates the current aim angle.
 - `windMeter.png` (375×374 → 120×120) → `windMeter.png` — top-right wind gauge with
-  a direction/strength needle.
+  an analog direction/strength needle. Superseded by `windMeterBlank.png` (no
+  pre-drawn needle) on 2026-08-03 so the drawn needle renders on a clean face.
 - `powerMeter.png` (165×959 → 40×232) → `powerMeter.png` — vertical charge bar
   (right side) with a fill that grows upward.
 

@@ -711,7 +711,7 @@ export class GameScene extends Phaser.Scene {
     // Needle direction: 0 = up; positive deflection swings toward +x (right).
     const ndx = Math.sin(deflection);
     const ndy = -Math.cos(deflection);
-    // Hub disc covers the pre-drawn needle's pivot.
+    // Gauge centre cap.
     this.windNeedle.fillStyle(0x222831, 1);
     this.windNeedle.fillCircle(windX, windY, 7);
     // Needle shaft.
