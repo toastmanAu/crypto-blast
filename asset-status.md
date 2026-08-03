@@ -6,10 +6,20 @@ Update this as each generation wave drops. Not wired into the engine yet (P3/P5 
 _Wave 1: 2026-06-17 — 18 files (weapons + 2 ape poses + explosion strip)._
 _Wave 2: 2026-06-17 — 8 files (walk ×4 + jump ×4)._
 _Title logo: 2026-08-03 — `title.png` (1024×1024) → `titleLogo.png` (512×512, 54 KB)._
+_Aim/HUD meters: 2026-08-03 — `aim.png` → `aimOverlay.png` (15 KB), `windMeter.png` (7.5 KB), `powerMeter.png` (3.9 KB)._
 
 ## Title logo (done 2026-08-03)
 `assets/raw/title.png` → resized to 512×512 + pngquant → `public/sprites/titleLogo.png`.
 Displayed on the title screen (`BootScene`). Game rebranded to **Ape Blast**.
+
+## Aim + HUD meters (done 2026-08-03)
+- `aim.png` (207×202) → `aimOverlay.png` — quarter-circle aiming overlay above the
+  active ape (replaces the old `apeAimArm` shoulder overlay). A rotating needle
+  indicates the current aim angle.
+- `windMeter.png` (375×374 → 120×120) → `windMeter.png` — top-right wind gauge with
+  a direction/strength needle.
+- `powerMeter.png` (165×959 → 40×232) → `powerMeter.png` — vertical charge bar
+  (right side) with a fill that grows upward.
 
 ## Engine-ready prep (done 2026-06-17)
 Run `python3 scripts/prep-assets.py` to regenerate after any new wave. It reads raw
