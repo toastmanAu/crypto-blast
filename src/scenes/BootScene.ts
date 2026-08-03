@@ -8,25 +8,27 @@ export class BootScene extends Phaser.Scene {
     super('Boot');
   }
 
+  preload(): void {
+    this.load.image('titleLogo', '/sprites/titleLogo.png');
+  }
+
   create(): void {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
 
-    this.add.text(cx, cy - 130, 'CRYPTO BLAST', {
-      color: '#33ddaa',
-      fontSize: '52px',
-      fontStyle: 'bold',
-    }).setOrigin(0.5);
+    // Title logo (Ape Blast).
+    this.add.image(cx, cy - 160, 'titleLogo')
+      .setDisplaySize(280, 280);
 
-    this.add.text(cx, cy - 64, 'SELECT MODE', {
+    this.add.text(cx, cy + 20, 'SELECT MODE', {
       color: '#9effa0',
       fontSize: '18px',
     }).setOrigin(0.5);
 
-    this.addOption(cx, cy + 4, '1 PLAYER   (vs AI)', [1]);
-    this.addOption(cx, cy + 66, '2 PLAYERS   (hotseat)', []);
+    this.addOption(cx, cy + 84, '1 PLAYER   (vs AI)', [1]);
+    this.addOption(cx, cy + 146, '2 PLAYERS   (hotseat)', []);
 
-    this.add.text(cx, cy + 150, 'press 1 or 2  —  or click', {
+    this.add.text(cx, cy + 220, 'press 1 or 2  —  or click', {
       color: '#7a8a99',
       fontSize: '14px',
     }).setOrigin(0.5);

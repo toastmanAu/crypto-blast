@@ -5,6 +5,11 @@ Update this as each generation wave drops. Not wired into the engine yet (P3/P5 
 
 _Wave 1: 2026-06-17 — 18 files (weapons + 2 ape poses + explosion strip)._
 _Wave 2: 2026-06-17 — 8 files (walk ×4 + jump ×4)._
+_Title logo: 2026-08-03 — `title.png` (1024×1024) → `titleLogo.png` (512×512, 54 KB)._
+
+## Title logo (done 2026-08-03)
+`assets/raw/title.png` → resized to 512×512 + pngquant → `public/sprites/titleLogo.png`.
+Displayed on the title screen (`BootScene`). Game rebranded to **Ape Blast**.
 
 ## Engine-ready prep (done 2026-06-17)
 Run `python3 scripts/prep-assets.py` to regenerate after any new wave. It reads raw
