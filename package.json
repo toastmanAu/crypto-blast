@@ -11,15 +11,16 @@
     "replay": "vite-node scripts/replay.ts"
   },
   "dependencies": {
+    "@ckb-lumos/base": "^0.23.0",
+    "@ckb-lumos/codec": "^0.23.0",
+    "@ckb-lumos/toolkit": "^0.23.0",
+    "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "phaser": "^3.80.1"
   },
   "devDependencies": {
-    "@ckb-lumos/base": "^0.23.0",
-    "@ckb-lumos/codec": "^0.23.0",
     "@ckb-lumos/helpers": "^0.23.0",
     "@ckb-lumos/lumos": "^0.23.0",
-    "@noble/curves": "^2.2.0",
     "@types/node": "^26.0.1",
     "typescript": "^5.4.0",
     "vite": "^5.2.0",

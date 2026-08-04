@@ -132,6 +132,24 @@ escrow cell (1000 CKB, forfeit-lock pin set)
 
 Script: `scripts/prove-forfeit.ts`.
 
+### In-game verifier proof (PROVE ON-CHAIN)
+
+The game itself is wired to the deployed verifier-lock. At match end, a
+**PROVE ON-CHAIN** button submits the recorded tape to the verifier-lock on
+testnet: the on-chain kernel re-executes the sim and unlocks only if the replay
+commits to the recorded result. Flow: create a verifier cell (`seed ‖ commitment`
+args) → spend it with the tape as witness. Implemented in
+`src/chain/verifierProof.ts` (browser-side, Lumos molecule codecs + noble secp).
+
+First in-game-style proof (2,568-tick match, seed 1234):
+
+| Step | Tx hash | Block |
+|------|---------|-------|
+| Verifier (claim) cell created | `0x4b61a4ba…` | — |
+| Proof (tape spends the cell) | `0x06e6c5ab…` | 21,968,790 |
+
+Test script: `scripts/test-verifier-proof.ts`.
+
 Match seeding is the other half of the integration: `MATCH_SEED` is currently fixed (`1234`) for local development, but the seed is intended to come from the lobby / chain (e.g. a committed random beacon), making the whole match deterministic and verifiable from an on-chain starting point.
 
 ---

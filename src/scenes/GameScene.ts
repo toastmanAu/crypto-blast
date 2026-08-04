@@ -6,8 +6,10 @@ import {
   WorldState, TickInput, SimEvent, APE_WIDTH, APE_HEIGHT, APE_MAX_HEALTH,
   createWorld, stepWorld, muzzle, commitWorld,
 } from '../sim/World';
-import { GameTape, createTape, recordTick } from '../sim/tape';
+import { GameTape, createTape, recordTick, replay } from '../sim/tape';
 import { toHex } from '../sim/serialize';
+import { tapeToBytes } from '../sim/tapeBinary';
+import { proveMatch, explorerTxUrl } from '../chain/verifierProof';
 import { aimAngle } from '../core/aim';
 import { isSolid, columnSurface } from '../physics/DestructibleTerrain';
 import { nextRandom } from '../core/rng';
@@ -417,6 +419,14 @@ export class GameScene extends Phaser.Scene {
     this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 50, prompt, {
       color: '#cccccc', fontSize: '20px',
     }).setOrigin(0.5).setDepth(10);
+
+    // Prove-on-chain button: submits the match tape to the deployed verifier-lock.
+    const proveBtn = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 110, '⛓  PROVE ON-CHAIN', {
+      color: '#ffffff', fontSize: '20px', backgroundColor: '#1a4d2e', padding: { x: 16, y: 8 },
+    }).setOrigin(0.5).setDepth(10).setInteractive({ useHandCursor: true });
+    proveBtn.on('pointerover', () => proveBtn.setColor('#33ddaa'));
+    proveBtn.on('pointerout', () => proveBtn.setColor('#ffffff'));
+    proveBtn.on('pointerdown', () => this.showProveDialog());
   }
 
   /** True while an AI-controlled team owns the active turn (aiming or resolving). */
@@ -438,6 +448,73 @@ export class GameScene extends Phaser.Scene {
       { color: '#9effa0', fontSize: '13px', backgroundColor: '#00000088', padding: { x: 6, y: 4 } },
     );
     this.tweens.add({ targets: toast, alpha: 0, delay: 4000, duration: 1000, onComplete: () => toast.destroy() });
+  }
+
+  /** DOM dialog asking for a throwaway testnet key, then runs the on-chain proof. */
+  private showProveDialog(): void {
+    // Remove any existing dialog.
+    document.getElementById('prove-dialog')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'prove-dialog';
+    overlay.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);z-index:100;font-family:monospace;';
+    overlay.innerHTML = `
+      <div style="background:#0d1117;border:1px solid #33ddaa;border-radius:8px;padding:24px;max-width:520px;color:#e6edf3;">
+        <h3 style="margin:0 0 12px;color:#33ddaa;">Prove match on-chain</h3>
+        <p style="font-size:13px;line-height:1.5;color:#9da7b3;margin:0 0 12px;">
+          Submits this match's tape to the deployed <b>verifier-lock</b> on CKB
+          <b>testnet</b>. The on-chain kernel re-executes the sim and only unlocks
+          if the replay commits to the recorded result — an immutable proof.
+        </p>
+        <p style="font-size:12px;color:#ffaa33;margin:0 0 12px;">
+          ⚠ Use a THROWAWAY TESTNET key with a little testnet CKB. Never a mainnet key.
+        </p>
+        <input id="prove-key" type="password" placeholder="testnet private key (64-hex)"
+          style="width:100%;box-sizing:border-box;padding:8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#e6edf3;font-family:monospace;" />
+        <div id="prove-status" style="font-size:12px;color:#9da7b3;margin-top:10px;min-height:16px;"></div>
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <button id="prove-go" style="flex:1;padding:8px;background:#1a4d2e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:monospace;">Prove</button>
+          <button id="prove-cancel" style="flex:1;padding:8px;background:#30363d;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:monospace;">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const status = overlay.querySelector('#prove-status') as HTMLElement;
+    const keyInput = overlay.querySelector('#prove-key') as HTMLInputElement;
+    overlay.querySelector('#prove-cancel')!.addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#prove-go')!.addEventListener('click', () => {
+      const key = keyInput.value.trim();
+      if (!/^(0x)?[0-9a-fA-F]{64}$/.test(key)) {
+        status.textContent = 'Invalid key — expected 64 hex characters.';
+        status.style.color = '#ff7777';
+        return;
+      }
+      void this.runProof(key, status);
+    });
+  }
+
+  /** Build + submit the verifier proof, streaming progress into `statusEl`. */
+  private async runProof(privkey: string, statusEl: HTMLElement): Promise<void> {
+    try {
+      // Commitment from replaying the exact recorded tape (what the kernel checks).
+      const commitment = commitWorld(replay(this.tape));
+      const tapeBytes = tapeToBytes(this.tape.inputs);
+
+      const result = await proveMatch({
+        seed: this.tape.seed,
+        commitment,
+        tapeBytes,
+        privkeyHex: privkey,
+        onStatus: (m) => { statusEl.textContent = m; },
+      });
+
+      statusEl.innerHTML =
+        `✓ Proof confirmed on-chain<br>` +
+        `<a href="${explorerTxUrl(result.proofTxHash)}" target="_blank" rel="noopener" style="color:#33ddaa;">view proof tx on explorer</a>`;
+    } catch (e) {
+      statusEl.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      statusEl.style.color = '#ff7777';
+    }
   }
 
   /** Sample held keys; latch press/release edges until a tick consumes them. */
