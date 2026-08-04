@@ -1,8 +1,8 @@
-# Crypto Blast
+# Ape Blast
 
 A turn-based artillery game — think *Worms*, starring NervApes — built on a **headless, deterministic simulation** so that an entire match reduces to `{ seed, inputs[] }` and can be **re-executed and hash-verified by anyone**. That property is the whole point: it's what lets match outcomes be trustlessly verified off the render thread, and ultimately on-chain (the "Teeworlds-on-CKB" model).
 
-Phaser 3 + TypeScript. Deterministic sim in `src/sim` / `src/physics` / `src/core`; a thin Phaser render/IO layer in `src/scenes` / `src/render`.
+Phaser 3 + TypeScript. Deterministic sim in `src/sim` / `src/physics` / `src/core`; a thin Phaser render/IO layer in `src/scenes` / `src/render`; browser-side chain integration in `src/chain`.
 
 ---
 
@@ -14,6 +14,8 @@ npm run dev        # Vite dev server → http://localhost:5173/
 npm test           # Vitest suite (headless sim + replay determinism)
 npm run build      # tsc typecheck + vite production build
 ```
+
+On launch, the **title screen** shows the Ape Blast logo and a mode select: **1** for single-player vs AI, **2** for two-player hotseat (or click). After a match ends, a **PROVE ON-CHAIN** button can submit the replay tape to the deployed verifier-lock on testnet (see [In-game verifier proof](#in-game-verifier-proof-prove-on-chain)).
 
 ### Controls
 
@@ -49,7 +51,7 @@ All six weapons have their full special behaviours implemented: cluster shrapnel
 
 ## Chain integration (the "Teeworlds-on-CKB" model)
 
-Crypto Blast is designed for trustless, verifiable matches — the kind of competitive integrity a decentralized tournament platform (e.g. CKB/Nervos) needs. The guiding idea — internally nicknamed the *"Teeworlds-on-CKB" model* — is simple: keep the simulation fully deterministic, record only inputs, and let any party re-execute the inputs to verify the result. No trusted server, no replay of rendered frames — just `{ seed, inputs[] }` and a hash.
+Ape Blast is designed for trustless, verifiable matches — the kind of competitive integrity a decentralized tournament platform (e.g. CKB/Nervos) needs. The guiding idea — internally nicknamed the *"Teeworlds-on-CKB" model* — is simple: keep the simulation fully deterministic, record only inputs, and let any party re-execute the inputs to verify the result. No trusted server, no replay of rendered frames — just `{ seed, inputs[] }` and a hash.
 
 ### How it works
 
@@ -158,16 +160,23 @@ Match seeding is the other half of the integration: `MATCH_SEED` is currently fi
 
 ```
 src/
-  core/        time.ts (fixed timestep), rng.ts (serializable cursor), aim.ts
+  core/        time.ts (fixed timestep), rng.ts (serializable cursor), aim.ts, trig.ts (dsin/dcos)
   physics/     ProjectilePhysics.ts, DestructibleTerrain.ts
   terrain/     TerrainGenerator.ts (seeded terrain mask)
   weapons/     weaponData.ts (WEAPON_ORDER + WeaponDef arsenal)
-  sim/         World.ts (WorldState + stepWorld + commitWorld), serialize.ts (canonical bytes + blake2b-256), tape.ts, demoMatch.ts
-  render/      TerrainRenderer.ts, WeaponWheel.ts   (Phaser; read sim, never mutate it)
-  scenes/      BootScene.ts, GameScene.ts (thin driver: sample input → step → interpolate → draw)
-scripts/       replay.ts (headless verify CLI)
-tests/         Vitest — sim units + replay determinism
-docs/superpowers/  specs/ + plans/ (design + implementation docs)
+  sim/         World.ts (WorldState + stepWorld + commitWorld), serialize.ts (canonical bytes + blake2b-256),
+               tape.ts + tapeBinary.ts (record/replay + format-v2 bytes), demoMatch.ts,
+               seed.ts / exchange.ts / attest.ts / forfeit.ts / challenge.ts (settlement primitives)
+  ai/          AIPlayer.ts (deterministic bot)
+  audio/       SoundManager.ts
+  chain/       verifierProof.ts (browser-side on-chain proof builder)
+  render/      TerrainRenderer.ts, WeaponWheel.ts, CrateRenderer.ts, HazardRenderer.ts  (Phaser; read sim, never mutate it)
+  scenes/      BootScene.ts (title/mode select), GameScene.ts (thin driver: sample input → step → interpolate → draw)
+  util/        download.ts
+scripts/       replay.ts (headless verify CLI), prep-assets.py, deploy/proof scripts
+tests/         Vitest — sim units + replay determinism + settlement codecs
+verifier/      Rust mirror of the sim + the CKB-VM lock scripts (verifier/escrow/forfeit/claim)
+docs/          protocol docs + superpowers/ specs/ + plans/ (design + implementation records)
 ```
 
 **The determinism contract** is the load-bearing rule of the codebase:
@@ -195,9 +204,18 @@ docs/superpowers/  specs/ + plans/ (design + implementation docs)
 - **Commit-reveal forfeit-lock** — `verifier/contract/src/forfeit.rs` (`docs/FORFEIT.md`); play-time move binding (COMMIT/ACK/REVEAL) + on-chain reveal-or-forfeit; FORFEIT-CLAIM (~72M) / ADVANCE (~6M) / FINALIZE (~53K); 12/12 ckb-testtool; deployed to testnet (`0x355a…3e3f`). ✅
 - **Court challenge window** — optimistic fraud proof for final-move equivocation; CLAIM → pending-claim cell → CHALLENGE (~6.2M) / FINALIZE (~59K); 8/8 ckb-testtool; deployed to testnet (`0x4f37…ce4d`). ✅
 - **Full settlement cycle proven on testnet** — escrow → court claim (37-turn match) → pending-claim → FINALIZE → 500 CKB to each player; all txs committed, payout cells live. ✅
+- **Forfeit protocol proven on testnet** — escrow → FORFEIT-CLAIM (5-turn prefix) → pending-forfeit → FORFEIT-FINALIZE → 1000 CKB to claimant; all committed. ✅
+- **In-game verifier proof** — PROVE ON-CHAIN button at match end submits the tape to the deployed verifier-lock from the browser (`src/chain/verifierProof.ts`); first proof committed on testnet (2,568-tick match). ✅
+- **Ape Blast rebrand + UI pass** — title screen with logo + mode select (1P vs AI / 2P hotseat), quarter-circle aim overlay, wind + power meters. ✅
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 
 ## Assets
 
 Art is generated externally (Flux / GPT) and processed into engine-ready sprites + a manifest by `scripts/prep-assets.py` (raw masters live in the gitignored `assets/raw/`). See [`asset-status.md`](./asset-status.md) for the current state of every asset and the prep pipeline.
+
+UI assets (processed from `assets/raw/` into `public/sprites/`):
+- `titleLogo.png` — Ape Blast title-screen logo
+- `aimOverlay.png` — quarter-circle aiming overlay above the active ape
+- `windMeter.png` — analog wind gauge (blank face; the needle is drawn in-engine)
+- `powerMeter.png` — vertical charge bar (fill is drawn in-engine, clipped to the track)
