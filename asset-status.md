@@ -60,7 +60,7 @@ seed → same ground → identical replays). Re-tiles on every carve.
 - ⚠️ `flux-prompts.md` entries A4 (walk) and the explosion strip are therefore **superseded** — those were produced via GPT, not Flux. Treat the Flux prompts for those as historical.
 
 ## Conventions confirmed
-- All files arrive **RGBA with real alpha** (Flux → Wyltek bg-removal off the flat `#FF00FF` key; GPT → rembg) — no re-keying needed before Phaser. **Exception:** `walk_3.png` has ~45 residual magenta pixels in the enclosed gap between the legs (interior pocket rembg missed). One-line cleanup pending.
+- All files arrive **RGBA with real alpha** (Flux → Wyltek bg-removal off the flat `#FF00FF` key; GPT → rembg) — no re-keying needed before Phaser. `walk_3.png` has ~75 residual magenta pixels in the enclosed leg gap, but the prep pipeline's `clean_magenta` (fringe pass, alpha < 250) removes them when building `apeWalk.png` — the shipped atlas is clean.
 - **Canonical facing = RIGHT** (matches sim's `facing right`; walk + jump both face right). The odd ones out are `default_ape.png` and `worried_ape.png`, which face **LEFT** — flip with `setFlipX` in-engine or regenerate.
 - **Frame registration:** walk (615×616 ±2px) and jump (613×613) came back effectively pre-registered — play back cleanly. The **explosion strip is the exception**: 5 different canvas sizes, must be normalized to one centered square before becoming a spritesheet or the fireball jumps in scale/position.
 - **Jump is a 4-frame arc, not the single A5 pose:** `jump_0` crouch/anticipation → `jump_1` launch → `jump_2` airborne peak → `jump_3` land. Drive off vertical velocity rather than holding one frame.

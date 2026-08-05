@@ -8,7 +8,6 @@ export interface WeaponDef {
   damage: number;
   launchSpeed: number;   // px/s at full power
   ammoStart: number;     // -1 = unlimited
-  placeholder?: boolean; // ballistic stand-in; real behaviour is a later phase (P4)
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {

@@ -98,8 +98,10 @@ export function privateKeyToLockArg(privkeyHex: string): string {
 /**
  * Recoverable secp256k1 signature over a 32-byte message → 65 bytes.
  * The sighash lock expects `[r(32) ‖ s(32) ‖ v(1)]` — recovery id LAST.
+ * (NOTE: the escrow/forfeit locks' internal recover_blake160 uses `[v ‖ r ‖ s]`
+ * — a different layout. Do not conflate the two.)
  */
-function signRecoverable(message: Uint8Array, privkeyHex: string): Uint8Array {
+export function signRecoverable(message: Uint8Array, privkeyHex: string): Uint8Array {
   const privkey = fromHex(privkeyHex);
   const rawSig = secp256k1.sign(message, privkey, { prehash: false }); // 64-byte compact r‖s
   const pub = secp256k1.getPublicKey(privkey, true);

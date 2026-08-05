@@ -23,6 +23,8 @@ assets/_wip/
 Thumbs.db
 .vscode/
 .idea/
+.qwen/
+.remember/
 
 # Logs
 *.log

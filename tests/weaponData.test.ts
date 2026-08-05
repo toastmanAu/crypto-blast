@@ -29,8 +29,12 @@ describe('weapon data', () => {
     }
   });
 
-  it('bridge is implemented (no longer a placeholder)', () => {
-    expect(weaponAt(5).id).toBe('bridge');
-    expect(weaponAt(5).placeholder).toBeFalsy();
+  it('bridge is a real weapon (the placeholder concept is fully removed)', () => {
+    const bridge = weaponAt(5);
+    expect(bridge.id).toBe('bridge');
+    expect(bridge.blastRadius).toBeGreaterThan(0);
+    expect(bridge.launchSpeed).toBeGreaterThan(0);
+    // No `placeholder` field exists on WeaponDef anymore — all behaviours shipped.
+    expect('placeholder' in bridge).toBe(false);
   });
 });
