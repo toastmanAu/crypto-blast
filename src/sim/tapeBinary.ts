@@ -32,3 +32,31 @@ export function tapeToBytes(inputs: TickInput[]): Uint8Array {
   }
   return out;
 }
+
+/** Decode a format-v2 binary tape back into tick inputs (inverse of
+ *  `tapeToBytes`). Used by the networked client to replay an opponent's turn.
+ *  Mirrors the Rust `decode_tape` bit-for-bit. Trailing bytes that don't form a
+ *  full 3-byte tick are ignored. */
+export function bytesToTape(bytes: Uint8Array): TickInput[] {
+  const n = Math.floor(bytes.length / 3);
+  const out: TickInput[] = [];
+  for (let i = 0; i < n; i++) {
+    const low = bytes[i * 3];
+    const high = bytes[i * 3 + 1];
+    const weapon = bytes[i * 3 + 2];
+    out.push({
+      aimUp: !!(low & 1),
+      aimDown: !!(low & 2),
+      aimLeft: !!(low & 4),
+      aimRight: !!(low & 8),
+      fireHeld: !!(low & 16),
+      firePressed: !!(low & 32),
+      fireReleased: !!(low & 64),
+      moveLeft: !!(low & 128),
+      moveRight: !!(high & 1),
+      jumpPressed: !!(high & 2),
+      selectWeapon: weapon === 0xff ? undefined : weapon,
+    });
+  }
+  return out;
+}

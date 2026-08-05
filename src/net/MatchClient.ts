@@ -67,16 +67,38 @@ export class MatchClient {
   readonly url: string;
   state: MatchClientState = 'idle';
 
+  /**
+   * Event handlers. Settable so the boot scene can own the matchmaking-phase
+   * events (open/waiting/matched) and the game scene can take over the
+   * play-phase events (turn/your_turn/opponent_left) after the handoff.
+   */
+  onOpen: (() => void) | null = null;
+  onWaiting: (() => void) | null = null;
+  onMatched: ((info: MatchInfo) => void) | null = null;
+  onTurn: ((tape: Uint8Array) => void) | null = null;
+  onYourTurn: ((turnIndex: number) => void) | null = null;
+  onGameOver: ((winner: number) => void) | null = null;
+  onOpponentLeft: (() => void) | null = null;
+  onError: ((code: string, message: string) => void) | null = null;
+  onClose: (() => void) | null = null;
+
   private ws: WebSocketLike | null = null;
-  private callbacks: MatchCallbacks;
   private makeSocket: WebSocketFactory;
   private room: string | null = null;
   private team: number | null = null;
 
   constructor(url: string, callbacks: MatchCallbacks = {}, makeSocket?: WebSocketFactory) {
     this.url = url;
-    this.callbacks = callbacks;
     this.makeSocket = makeSocket ?? ((u) => new WebSocket(u) as unknown as WebSocketLike);
+    this.onOpen = callbacks.onOpen ?? null;
+    this.onWaiting = callbacks.onWaiting ?? null;
+    this.onMatched = callbacks.onMatched ?? null;
+    this.onTurn = callbacks.onTurn ?? null;
+    this.onYourTurn = callbacks.onYourTurn ?? null;
+    this.onGameOver = callbacks.onGameOver ?? null;
+    this.onOpponentLeft = callbacks.onOpponentLeft ?? null;
+    this.onError = callbacks.onError ?? null;
+    this.onClose = callbacks.onClose ?? null;
   }
 
   /** The team this client controls (valid once matched). */
@@ -98,15 +120,15 @@ export class MatchClient {
     const ws = this.makeSocket(this.url);
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
-      this.callbacks.onOpen?.();
+      this.onOpen?.();
     };
     ws.onmessage = (ev) => this.handleMessage(ev.data);
     ws.onclose = () => {
       this.state = 'closed';
-      this.callbacks.onClose?.();
+      this.onClose?.();
     };
     ws.onerror = () => {
-      this.callbacks.onError?.('socket_error', 'websocket error');
+      this.onError?.('socket_error', 'websocket error');
     };
     this.ws = ws;
   }
@@ -148,30 +170,30 @@ export class MatchClient {
   /** Dispatch an incoming frame: binary → turn tape, text → JSON control. */
   private handleMessage(data: unknown): void {
     if (data instanceof ArrayBuffer) {
-      this.callbacks.onTurn?.(new Uint8Array(data));
+      this.onTurn?.(new Uint8Array(data));
       return;
     }
     if (data instanceof Uint8Array) {
-      this.callbacks.onTurn?.(data);
+      this.onTurn?.(data);
       return;
     }
     let msg: { type: string } & Record<string, unknown>;
     try {
       msg = JSON.parse(typeof data === 'string' ? data : String(data));
     } catch {
-      this.callbacks.onError?.('bad_frame', 'unparseable control frame');
+      this.onError?.('bad_frame', 'unparseable control frame');
       return;
     }
     switch (msg.type) {
       case 'waiting':
         this.state = 'waiting';
-        this.callbacks.onWaiting?.();
+        this.onWaiting?.();
         break;
       case 'matched':
         this.state = 'matched';
         this.room = msg.room as string;
         this.team = msg.team as number;
-        this.callbacks.onMatched?.({
+        this.onMatched?.({
           room: msg.room as string,
           team: msg.team as number,
           seed: msg.seed as number,
@@ -180,25 +202,25 @@ export class MatchClient {
         break;
       case 'turn':
         // A JSON-typed turn is not expected (tapes are binary), but be safe.
-        if (msg.tape instanceof Uint8Array) this.callbacks.onTurn?.(msg.tape);
+        if (msg.tape instanceof Uint8Array) this.onTurn?.(msg.tape);
         break;
       case 'your_turn':
-        this.callbacks.onYourTurn?.(msg.turnIndex as number);
+        this.onYourTurn?.(msg.turnIndex as number);
         break;
       case 'game_over':
-        this.callbacks.onGameOver?.(msg.winner as number);
+        this.onGameOver?.(msg.winner as number);
         break;
       case 'opponent_left':
         this.state = 'closed';
-        this.callbacks.onOpponentLeft?.();
+        this.onOpponentLeft?.();
         break;
       case 'error':
-        this.callbacks.onError?.(msg.code as string, msg.message as string);
+        this.onError?.(msg.code as string, msg.message as string);
         break;
       case 'pong':
         break;
       default:
-        this.callbacks.onError?.('bad_frame', `unknown message type: ${msg.type}`);
+        this.onError?.('bad_frame', `unknown message type: ${msg.type}`);
     }
   }
 }

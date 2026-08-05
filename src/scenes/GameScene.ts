@@ -8,7 +8,7 @@ import {
 } from '../sim/World';
 import { GameTape, createTape, recordTick, replay } from '../sim/tape';
 import { toHex } from '../sim/serialize';
-import { tapeToBytes } from '../sim/tapeBinary';
+import { tapeToBytes, bytesToTape } from '../sim/tapeBinary';
 import { proveMatch, explorerTxUrl } from '../chain/verifierProof';
 import type { OnlineMatch } from '../net/MatchClient';
 import { aimAngle } from '../core/aim';
@@ -97,6 +97,11 @@ export class GameScene extends Phaser.Scene {
   private ai = new AIPlayer();
   private sfx = new SoundManager();
   private online: OnlineMatch | null = null; // set for a networked match
+  // Networked turn exchange: inputs I recorded this turn (sent on turn end) and
+  // the opponent's turn inputs being replayed (fed one per tick).
+  private turnInputs: TickInput[] = [];
+  private replayQueue: TickInput[] = [];
+  private onlineEnded = false; // opponent left / match concluded
 
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
@@ -209,6 +214,22 @@ export class GameScene extends Phaser.Scene {
     const seed = this.online ? this.online.seed : MATCH_SEED;
     this.world = createWorld(seed, GAME_WIDTH, GAME_HEIGHT);
     this.tape = createTape(seed, GAME_WIDTH, GAME_HEIGHT);
+
+    // Networked match: wire the turn exchange on the live connection.
+    if (this.online) {
+      this.turnInputs = [];
+      this.replayQueue = [];
+      this.onlineEnded = false;
+      const client = this.online.client;
+      // The opponent's turn tape → queue its inputs for replay (one per tick).
+      client.onTurn = (tape) => {
+        this.replayQueue.push(...bytesToTape(tape));
+      };
+      client.onOpponentLeft = () => {
+        this.onlineEnded = true;
+        this.showOnlineNotice('opponent left — you win by forfeit');
+      };
+    }
 
     this.terrain = new TerrainRenderer(this, this.world.mask, {
       dirt: this.texToImageData('terrainDirt'),
@@ -343,23 +364,55 @@ export class GameScene extends Phaser.Scene {
 
   update(time: number, delta: number): void {
     this.now = time;
-    // Human input is ignored while an AI team owns the turn.
-    if (this.isAiTurn()) {
-      if (this.wheel.isOpen) this.wheel.close();
-    } else {
+    // Input is sampled only when this client can act: its own turn online, or a
+    // non-AI turn in local play. Otherwise held keys / the wheel are ignored.
+    const canAct = this.online ? this.isMyOnlineTurn() : !this.isAiTurn();
+    if (canAct) {
       this.sampleInput();
+    } else if (this.wheel.isOpen) {
+      this.wheel.close();
     }
 
-    this.accumulator += delta / 1000;
-    const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
-    for (let i = 0; i < steps; i++) {
-      const input = this.isAiTurn() ? this.ai.nextInput(this.world) : this.takeTickInput();
-      if (input.jumpPressed) this.sfx.jump();
-      stepWorld(this.world, input);
-      recordTick(this.tape, input);
-      this.applyEvents(this.world.events);
+    // Online: pause the sim while waiting for the opponent's turn tape (don't
+    // build up a time backlog). Both clients only step turns they own or replay.
+    if (this.isOnlineWaiting()) {
+      this.accumulator = 0;
+    } else {
+      this.accumulator += delta / 1000;
+      const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+      for (let i = 0; i < steps; i++) {
+        const turnBefore = this.world.turn;
+        const wasMyOnlineTurn = this.online ? this.isMyOnlineTurn() : false;
+
+        let input: TickInput;
+        if (this.online) {
+          if (this.isMyOnlineTurn()) {
+            // My turn: capture live input and record it for the turn tape.
+            input = this.takeTickInput();
+            this.turnInputs.push(input);
+          } else if (this.replayQueue.length > 0) {
+            // Opponent's turn: replay their tape one tick at a time.
+            input = this.replayQueue.shift()!;
+          } else {
+            break; // became waiting mid-drain (e.g. game over handled elsewhere)
+          }
+        } else {
+          input = this.isAiTurn() ? this.ai.nextInput(this.world) : this.takeTickInput();
+        }
+
+        if (input.jumpPressed) this.sfx.jump();
+        stepWorld(this.world, input);
+        recordTick(this.tape, input);
+        this.applyEvents(this.world.events);
+
+        // Online: my turn just ended → send the recorded turn tape to the opponent.
+        if (this.online && wasMyOnlineTurn && this.world.turn > turnBefore) {
+          this.online.client.sendTurn(tapeToBytes(this.turnInputs));
+          this.turnInputs = [];
+        }
+      }
+      this.accumulator = remainder;
     }
-    this.accumulator = remainder;
 
     // Turn-change banner: a new active ape (in AIMING) announces whose turn it is.
     if (this.world.phase === 'AIMING' && this.world.activeApe !== this.lastTurnApe) {
@@ -369,8 +422,12 @@ export class GameScene extends Phaser.Scene {
 
     // Game-over overlay (drawn once) + rematch.
     if (this.world.phase === 'GAMEOVER') {
-      if (!this.gameOverShown) this.showGameOver();
-      if (Phaser.Input.Keyboard.JustDown(this.rematchKey)) {
+      if (!this.gameOverShown) {
+        this.showGameOver();
+        // Online: release the room once the match concludes.
+        if (this.online) this.online.client.leave();
+      }
+      if (!this.online && Phaser.Input.Keyboard.JustDown(this.rematchKey)) {
         this.scene.restart({ aiTeams: this.aiTeams });
         return;
       }
@@ -440,6 +497,29 @@ export class GameScene extends Phaser.Scene {
     if (this.world.phase === 'GAMEOVER') return false;
     const active = this.world.apes[this.world.activeApe];
     return this.aiTeams.includes(active.team);
+  }
+
+  /** Online: is it this client's turn to act? */
+  private isMyOnlineTurn(): boolean {
+    if (!this.online) return false;
+    if (this.world.phase === 'GAMEOVER') return false;
+    return this.world.apes[this.world.activeApe].team === this.online.team;
+  }
+
+  /** Online: waiting for the opponent's turn tape (sim should pause). */
+  private isOnlineWaiting(): boolean {
+    if (!this.online || this.onlineEnded) return false;
+    if (this.world.phase === 'GAMEOVER') return false;
+    if (this.isMyOnlineTurn()) return false;
+    return this.replayQueue.length === 0;
+  }
+
+  /** Online: a transient notice (opponent left, etc.). */
+  private showOnlineNotice(text: string): void {
+    const notice = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 40, text, {
+      color: '#ffdd33', fontSize: '22px',
+    }).setOrigin(0.5).setDepth(10);
+    this.tweens.add({ targets: notice, alpha: 0, delay: 3500, duration: 1000, onComplete: () => notice.destroy() });
   }
 
   /** Download the recorded tape and show the exact command to verify it. */
