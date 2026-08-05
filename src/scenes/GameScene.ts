@@ -10,6 +10,7 @@ import { GameTape, createTape, recordTick, replay } from '../sim/tape';
 import { toHex } from '../sim/serialize';
 import { tapeToBytes } from '../sim/tapeBinary';
 import { proveMatch, explorerTxUrl } from '../chain/verifierProof';
+import type { OnlineMatch } from '../net/MatchClient';
 import { aimAngle } from '../core/aim';
 import { isSolid, columnSurface } from '../physics/DestructibleTerrain';
 import { nextRandom } from '../core/rng';
@@ -84,6 +85,7 @@ interface FrameInput {
  */
 export interface GameConfig {
   aiTeams?: number[]; // teams controlled by the AI (e.g. [1] for 1P vs AI)
+  online?: OnlineMatch; // set for a networked match (matchmaking service)
 }
 
 export class GameScene extends Phaser.Scene {
@@ -94,6 +96,7 @@ export class GameScene extends Phaser.Scene {
   private aiTeams: number[] = [];
   private ai = new AIPlayer();
   private sfx = new SoundManager();
+  private online: OnlineMatch | null = null; // set for a networked match
 
   // Raw input (named frameInput, NOT input — Phaser.Scene.input is the InputPlugin).
   private frameInput: FrameInput = {
@@ -200,9 +203,12 @@ export class GameScene extends Phaser.Scene {
 
   create(data?: GameConfig): void {
     this.aiTeams = data?.aiTeams ?? [];
+    this.online = data?.online ?? null;
     this.ai = new AIPlayer(); // fresh bot per match (scene instances are reused)
-    this.world = createWorld(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
-    this.tape = createTape(MATCH_SEED, GAME_WIDTH, GAME_HEIGHT);
+    // Networked matches use the server-provided seed; local modes use the fixed dev seed.
+    const seed = this.online ? this.online.seed : MATCH_SEED;
+    this.world = createWorld(seed, GAME_WIDTH, GAME_HEIGHT);
+    this.tape = createTape(seed, GAME_WIDTH, GAME_HEIGHT);
 
     this.terrain = new TerrainRenderer(this, this.world.mask, {
       dirt: this.texToImageData('terrainDirt'),
