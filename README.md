@@ -11,11 +11,12 @@ Phaser 3 + TypeScript. Deterministic sim in `src/sim` / `src/physics` / `src/cor
 ```bash
 npm install
 npm run dev        # Vite dev server → http://localhost:5173/
-npm test           # Vitest suite (headless sim + replay determinism)
+npm run server     # matchmaking/relay server → ws://localhost:8787 (for ONLINE mode)
+npm test           # Vitest suite (headless sim + replay determinism + server)
 npm run build      # tsc typecheck + vite production build
 ```
 
-On launch, the **title screen** shows the Ape Blast logo and a mode select: **1** for single-player vs AI, **2** for two-player hotseat (or click). After a match ends, a **PROVE ON-CHAIN** button can submit the replay tape to the deployed verifier-lock on testnet (see [In-game verifier proof](#in-game-verifier-proof-prove-on-chain)).
+On launch, the **title screen** shows the Ape Blast logo and a mode select: **1** for single-player vs AI, **2** for two-player hotseat, or **ONLINE** for a networked match via the matchmaking server (see [`docs/MATCHMAKING.md`](docs/MATCHMAKING.md)). After a match ends, a **PROVE ON-CHAIN** button can submit the replay tape to the deployed verifier-lock on testnet (see [In-game verifier proof](#in-game-verifier-proof-prove-on-chain)).
 
 ### Controls
 
@@ -170,11 +171,13 @@ src/
   ai/          AIPlayer.ts (deterministic bot)
   audio/       SoundManager.ts
   chain/       verifierProof.ts (browser-side on-chain proof builder)
+  net/         MatchClient.ts (WebSocket client for the matchmaking service)
   render/      TerrainRenderer.ts, WeaponWheel.ts, CrateRenderer.ts, HazardRenderer.ts  (Phaser; read sim, never mutate it)
   scenes/      BootScene.ts (title/mode select), GameScene.ts (thin driver: sample input → step → interpolate → draw)
   util/        download.ts
+server/        matchmaker.js (WebSocket matchmaking/relay, sim-agnostic) + protocol.js
 scripts/       replay.ts (headless verify CLI), prep-assets.py, deploy/proof scripts
-tests/         Vitest — sim units + replay determinism + settlement codecs
+tests/         Vitest — sim units + replay determinism + settlement codecs + server/integration
 verifier/      Rust mirror of the sim + the CKB-VM lock scripts (verifier/escrow/forfeit/claim)
 docs/          protocol docs + superpowers/ specs/ + plans/ (design + implementation records)
 ```
@@ -206,7 +209,8 @@ docs/          protocol docs + superpowers/ specs/ + plans/ (design + implementa
 - **Full settlement cycle proven on testnet** — escrow → court claim (37-turn match) → pending-claim → FINALIZE → 500 CKB to each player; all txs committed, payout cells live. ✅
 - **Forfeit protocol proven on testnet** — escrow → FORFEIT-CLAIM (5-turn prefix) → pending-forfeit → FORFEIT-FINALIZE → 1000 CKB to claimant; all committed. ✅
 - **In-game verifier proof** — PROVE ON-CHAIN button at match end submits the tape to the deployed verifier-lock from the browser (`src/chain/verifierProof.ts`); first proof committed on testnet (2,568-tick match). ✅
-- **Ape Blast rebrand + UI pass** — title screen with logo + mode select (1P vs AI / 2P hotseat), quarter-circle aim overlay, wind + power meters. ✅
+- **Standalone matchmaking (networked play)** — in-house WebSocket matchmaking/relay server + ONLINE mode; two real players play a turn-based match by exchanging turn tapes over the sim-agnostic relay (`server/`, `src/net/`, `docs/MATCHMAKING.md`). Replaces the deferred FiberQuest transport. Free matches; wagering is the follow-up. ✅
+- **Ape Blast rebrand + UI pass** — title screen with logo + mode select (1P vs AI / 2P hotseat / ONLINE), quarter-circle aim overlay, wind + power meters. ✅
 
 Tests are green and the build is clean. See `docs/superpowers/specs/` and `docs/superpowers/plans/` for the full design + implementation records.
 
