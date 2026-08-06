@@ -128,6 +128,7 @@ export class GameScene extends Phaser.Scene {
   private aimNeedle!: Phaser.GameObjects.Graphics;   // rotating aim-direction indicator
   private aimLine!: Phaser.GameObjects.Line;
   private powerMeterFill!: Phaser.GameObjects.Rectangle; // fill bar inside the meter
+  private powerFillMaxH = 0;                         // max fill height (the track height)
   private windMeterBg!: Phaser.GameObjects.Image;    // windMeter.png background
   private windNeedle!: Phaser.GameObjects.Graphics;  // wind direction/strength indicator
   private hud!: Phaser.GameObjects.Text;
@@ -307,16 +308,20 @@ export class GameScene extends Phaser.Scene {
 
     // Power meter (vertical bar, right side). The fill grows upward with charge,
     // clipped to the meter's inner track by a geometry mask so it reads as a
-    // liquid filling the gauge rather than a bar behind it.
-    const pmX = GAME_WIDTH - 40;
+    // liquid filling the gauge rather than a bar behind it. The track fractions
+    // are measured from powerMeterEmpty.png's frame bbox + empty interior channel.
+    const pmX = GAME_WIDTH - 44;
     const pmY = GAME_HEIGHT - 140;
-    const PM_W = 36, PM_H = 210;
+    const PM_W = 44, PM_H = 205;              // matches the 203:944 frame aspect
+    const PM_FILL_LEFT = 0.108, PM_FILL_TOP = 0.024;
+    const PM_FILL_W = 0.773, PM_FILL_H = 0.949;
     this.add.image(pmX, pmY, 'powerMeter').setDisplaySize(PM_W, PM_H).setDepth(8);
     // Inner track bounds (relative to the displayed meter's top-left corner).
-    const trackLeft = pmX - PM_W / 2 + 5;
-    const trackTop = pmY - PM_H / 2 + 6;
-    const trackW = 24;
-    const trackH = 195;
+    const trackLeft = pmX - PM_W / 2 + PM_FILL_LEFT * PM_W;
+    const trackTop = pmY - PM_H / 2 + PM_FILL_TOP * PM_H;
+    const trackW = PM_FILL_W * PM_W;
+    const trackH = PM_FILL_H * PM_H;
+    this.powerFillMaxH = trackH;
     this.powerMeterFill = this.add.rectangle(
       trackLeft + trackW / 2, trackTop + trackH, trackW, 0, 0xff5544,
     ).setOrigin(0.5, 1).setDepth(8);
@@ -874,7 +879,7 @@ export class GameScene extends Phaser.Scene {
 
     // Power meter fill: grows upward from the track's base with charge level.
     // Clipped to the inner track by the geometry mask set up in create().
-    this.powerMeterFill.height = w.aim.power * 195;
+    this.powerMeterFill.height = w.aim.power * this.powerFillMaxH;
 
     // Wind gauge: an analog needle rotating about the gauge centre. Wind
     // [-WIND_GAUGE_MAX, +WIND_GAUGE_MAX] maps onto a ±WIND_NEEDLE_MAX_RAD sweep

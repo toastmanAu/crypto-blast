@@ -20,7 +20,9 @@ Displayed on the title screen (`BootScene`). Game rebranded to **Ape Blast**.
   an analog direction/strength needle. Superseded by `windMeterBlank.png` (no
   pre-drawn needle) on 2026-08-03 so the drawn needle renders on a clean face.
 - `powerMeter.png` (165×959 → 40×232) → `powerMeter.png` — vertical charge bar
-  (right side) with a fill that grows upward.
+  (right side) with a fill that grows upward. Superseded by `powerMeterEmpty.png`
+  (256×1024, empty internal channel) on 2026-08-07 — cropped to the frame bbox
+  (203×944) and the drawn fill overlays the clean empty track.
 
 ## Engine-ready prep (done 2026-06-17)
 Run `python3 scripts/prep-assets.py` to regenerate after any new wave. It reads raw
