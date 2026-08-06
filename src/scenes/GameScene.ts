@@ -227,7 +227,7 @@ export class GameScene extends Phaser.Scene {
       };
       client.onOpponentLeft = () => {
         this.onlineEnded = true;
-        this.showOnlineNotice('opponent left — you win by forfeit');
+        this.showForfeitOverlay();
       };
     }
 
@@ -373,15 +373,18 @@ export class GameScene extends Phaser.Scene {
       this.wheel.close();
     }
 
-    // Online: pause the sim while waiting for the opponent's turn tape (don't
-    // build up a time backlog). Both clients only step turns they own or replay.
-    if (this.isOnlineWaiting()) {
+    // Online: pause the sim while waiting for the opponent's turn tape, or once
+    // the opponent has left (don't build up a time backlog). Both clients only
+    // step turns they own or replay.
+    const onlinePaused = this.isOnlineWaiting() || (!!this.online && this.onlineEnded);
+    if (onlinePaused) {
       this.accumulator = 0;
     } else {
       this.accumulator += delta / 1000;
       const { steps, remainder } = drainAccumulator(this.accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
       for (let i = 0; i < steps; i++) {
         const turnBefore = this.world.turn;
+        const phaseBefore = this.world.phase;
         const wasMyOnlineTurn = this.online ? this.isMyOnlineTurn() : false;
 
         let input: TickInput;
@@ -405,8 +408,12 @@ export class GameScene extends Phaser.Scene {
         recordTick(this.tape, input);
         this.applyEvents(this.world.events);
 
-        // Online: my turn just ended → send the recorded turn tape to the opponent.
-        if (this.online && wasMyOnlineTurn && this.world.turn > turnBefore) {
+        // Online: my turn just ended → send the recorded turn tape to the
+        // opponent. A turn ends when the turn counter advances OR the match
+        // reaches GAMEOVER (endTurn sets GAMEOVER without bumping `turn`).
+        const turnEnded = this.world.turn > turnBefore
+          || (this.world.phase === 'GAMEOVER' && phaseBefore !== 'GAMEOVER');
+        if (this.online && wasMyOnlineTurn && turnEnded) {
           this.online.client.sendTurn(tapeToBytes(this.turnInputs));
           this.turnInputs = [];
         }
@@ -514,12 +521,18 @@ export class GameScene extends Phaser.Scene {
     return this.replayQueue.length === 0;
   }
 
-  /** Online: a transient notice (opponent left, etc.). */
-  private showOnlineNotice(text: string): void {
-    const notice = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 40, text, {
-      color: '#ffdd33', fontSize: '22px',
+  /** Online: the opponent disconnected — a persistent "win by forfeit" overlay. */
+  private showForfeitOverlay(): void {
+    if (this.gameOverShown) return;
+    this.gameOverShown = true; // stop further play / turn banners
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT / 2;
+    this.add.rectangle(cx, cy, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.55).setDepth(9);
+    this.add.text(cx, cy - 30, 'OPPONENT LEFT', { color: '#ffffff', fontSize: '36px' }).setOrigin(0.5).setDepth(10);
+    this.add.text(cx, cy + 14, 'you win by forfeit', { color: '#9effa0', fontSize: '22px' }).setOrigin(0.5).setDepth(10);
+    this.add.text(cx, cy + 60, 'close this tab to return to the title screen', {
+      color: '#7a8a99', fontSize: '16px',
     }).setOrigin(0.5).setDepth(10);
-    this.tweens.add({ targets: notice, alpha: 0, delay: 3500, duration: 1000, onComplete: () => notice.destroy() });
   }
 
   /** Download the recorded tape and show the exact command to verify it. */
