@@ -33,6 +33,13 @@ export const S_SEED_COMMITS = 'seed_commits';
 export const S_SEED_READY = 'seed_ready';
 export const S_SEED_FAILED = 'seed_failed';
 
+// Escrow setup (Phase B): stake agreement → escrow cell → confirm. These are
+// relayed between the two players; the server does not interpret the stakes.
+export const C_STAKE_PROPOSE = 'stake_propose';
+export const C_STAKE_ACCEPT = 'stake_accept';
+export const C_ESCROW_READY = 'escrow_ready';
+export const C_ESCROW_CONFIRMED = 'escrow_confirmed';
+
 export const ErrorCodes = Object.freeze({
   BAD_FRAME: 'bad_frame',
   NOT_IN_ROOM: 'not_in_room',

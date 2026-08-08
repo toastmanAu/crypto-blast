@@ -34,7 +34,8 @@ describe('MatchClient', () => {
   beforeEach(() => {
     events = {
       open: [], waiting: [], matched: [], seedCommits: [], seedReady: [],
-      seedFailed: [], turn: [], yourTurn: [],
+      seedFailed: [], stakePropose: [], stakeAccept: [], escrowReady: [],
+      escrowConfirmed: [], turn: [], yourTurn: [],
       gameOver: [], opponentLeft: [], error: [], close: [],
     };
     client = new MatchClient('ws://test:8787', {
@@ -44,6 +45,10 @@ describe('MatchClient', () => {
       onSeedCommits: (c) => events.seedCommits.push(c),
       onSeedReady: (n) => events.seedReady.push(n),
       onSeedFailed: (reason) => events.seedFailed.push(reason),
+      onStakePropose: (pot) => events.stakePropose.push(pot),
+      onStakeAccept: () => events.stakeAccept.push(true),
+      onEscrowReady: (e) => events.escrowReady.push(e),
+      onEscrowConfirmed: () => events.escrowConfirmed.push(true),
       onTurn: (tape) => events.turn.push(tape),
       onYourTurn: (i) => events.yourTurn.push(i),
       onGameOver: (w) => events.gameOver.push(w),
@@ -97,6 +102,26 @@ describe('MatchClient', () => {
     it('sendSeedReveal() sends the nonce as 0x-hex', () => {
       client.sendSeedReveal(new Uint8Array([0x01, 0xff]));
       expect(socket.jsonSent()).toContainEqual({ type: 'seed_reveal', nonce: '0x01ff' });
+    });
+
+    it('sendStakePropose() sends the pot', () => {
+      client.sendStakePropose(100);
+      expect(socket.jsonSent()).toContainEqual({ type: 'stake_propose', pot: 100 });
+    });
+
+    it('sendStakeAccept() sends stake_accept', () => {
+      client.sendStakeAccept();
+      expect(socket.jsonSent()).toContainEqual({ type: 'stake_accept' });
+    });
+
+    it('sendEscrowReady() sends the outpoint + args', () => {
+      client.sendEscrowReady({ txHash: '0xabc', index: 0, args: '0xdead' });
+      expect(socket.jsonSent()).toContainEqual({ type: 'escrow_ready', txHash: '0xabc', index: 0, args: '0xdead' });
+    });
+
+    it('sendEscrowConfirmed() sends escrow_confirmed', () => {
+      client.sendEscrowConfirmed();
+      expect(socket.jsonSent()).toContainEqual({ type: 'escrow_confirmed' });
     });
 
     it('sendTurn() sends the tape as binary', () => {
@@ -156,6 +181,26 @@ describe('MatchClient', () => {
       socket.receive(JSON.stringify({ type: 'seed_failed', reason: 'bad reveal' }));
       expect(events.seedFailed).toEqual(['bad reveal']);
       expect(client.state).toBe('closed');
+    });
+
+    it('stake_propose → onStakePropose with the pot', () => {
+      socket.receive(JSON.stringify({ type: 'stake_propose', pot: 250 }));
+      expect(events.stakePropose).toEqual([250]);
+    });
+
+    it('stake_accept → onStakeAccept', () => {
+      socket.receive(JSON.stringify({ type: 'stake_accept' }));
+      expect(events.stakeAccept.length).toBe(1);
+    });
+
+    it('escrow_ready → onEscrowReady with the outpoint + args', () => {
+      socket.receive(JSON.stringify({ type: 'escrow_ready', txHash: '0xabc', index: 0, args: '0xdead' }));
+      expect(events.escrowReady).toEqual([{ txHash: '0xabc', index: 0, args: '0xdead' }]);
+    });
+
+    it('escrow_confirmed → onEscrowConfirmed', () => {
+      socket.receive(JSON.stringify({ type: 'escrow_confirmed' }));
+      expect(events.escrowConfirmed.length).toBe(1);
     });
 
     it('your_turn → onYourTurn with the turn index', () => {

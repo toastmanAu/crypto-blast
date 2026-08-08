@@ -17,6 +17,7 @@ import { WebSocketServer } from 'ws';
 import {
   decodeIncoming, encodeControl, ProtocolError, ErrorCodes,
   C_JOIN, C_TURN, C_LEAVE, C_PING, C_SEED_COMMIT, C_SEED_REVEAL,
+  C_STAKE_PROPOSE, C_STAKE_ACCEPT, C_ESCROW_READY, C_ESCROW_CONFIRMED,
   waiting, matched, yourTurn, opponentLeft, pong, error,
   seedCommits, seedReady, seedFailed, nonceCommit, toHex, fromHex,
 } from './protocol.js';
@@ -115,9 +116,26 @@ export class Matchmaker {
       case C_SEED_REVEAL:
         this.handleSeedReveal(client, msg.nonce);
         break;
+      case C_STAKE_PROPOSE:
+      case C_STAKE_ACCEPT:
+      case C_ESCROW_READY:
+      case C_ESCROW_CONFIRMED:
+        this.relayToOpponent(client, msg);
+        break;
       default:
         client.sendControl(error(ErrorCodes.BAD_FRAME, `unexpected control type: ${msg.type}`));
     }
+  }
+
+  /** Forward a peer-to-peer setup message to the sender's opponent. */
+  relayToOpponent(client, msg) {
+    const room = this._roomOf(client);
+    if (!room) {
+      client.sendControl(error(ErrorCodes.NOT_IN_ROOM, 'not in a room'));
+      return;
+    }
+    const opponent = room.clients[1 - client.team];
+    if (opponent && opponent !== client) opponent.sendControl(msg);
   }
 
   /** Dispatch a raw incoming ws message (binary tape or JSON control). */

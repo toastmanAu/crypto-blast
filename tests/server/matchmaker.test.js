@@ -186,6 +186,41 @@ describe('Matchmaker', () => {
     });
   });
 
+  describe('escrow-setup relay', () => {
+    let a, b;
+    beforeEach(() => {
+      a = makeFakeClient('a'); // team 0
+      b = makeFakeClient('b'); // team 1
+      mm.join(a);
+      mm.join(b);
+      seedRoom(mm, a, b);
+      a.clear();
+      b.clear();
+    });
+
+    it('relays stake_propose to the opponent', () => {
+      mm.dispatch(a, JSON.stringify({ type: 'stake_propose', pot: 100 }), false);
+      expect(b.controls()).toContainEqual({ type: 'stake_propose', pot: 100 });
+      expect(a.controls().some((m) => m.type === 'stake_propose')).toBe(false);
+    });
+
+    it('relays stake_accept back', () => {
+      mm.dispatch(b, JSON.stringify({ type: 'stake_accept' }), false);
+      expect(a.controls()).toContainEqual({ type: 'stake_accept' });
+    });
+
+    it('relays escrow_ready with the outpoint + args', () => {
+      const msg = { type: 'escrow_ready', txHash: '0xabc', index: 0, args: '0xdead' };
+      mm.dispatch(a, JSON.stringify(msg), false);
+      expect(b.controls()).toContainEqual(msg);
+    });
+
+    it('relays escrow_confirmed', () => {
+      mm.dispatch(b, JSON.stringify({ type: 'escrow_confirmed' }), false);
+      expect(a.controls()).toContainEqual({ type: 'escrow_confirmed' });
+    });
+  });
+
   describe('turn relay + ownership', () => {
     let a, b;
     beforeEach(() => {

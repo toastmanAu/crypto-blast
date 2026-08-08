@@ -47,6 +47,10 @@ export interface MatchCallbacks {
   onSeedCommits?: (commits: { commit0: Uint8Array; commit1: Uint8Array }) => void;
   onSeedReady?: (nonces: { nonce0: Uint8Array; nonce1: Uint8Array }) => void;
   onSeedFailed?: (reason: string) => void;
+  onStakePropose?: (pot: number) => void;
+  onStakeAccept?: () => void;
+  onEscrowReady?: (e: { txHash: string; index: number; args: string }) => void;
+  onEscrowConfirmed?: () => void;
   onTurn?: (tape: Uint8Array) => void;
   onYourTurn?: (turnIndex: number) => void;
   onGameOver?: (winner: number) => void;
@@ -95,6 +99,10 @@ export class MatchClient {
   onSeedCommits: ((commits: { commit0: Uint8Array; commit1: Uint8Array }) => void) | null = null;
   onSeedReady: ((nonces: { nonce0: Uint8Array; nonce1: Uint8Array }) => void) | null = null;
   onSeedFailed: ((reason: string) => void) | null = null;
+  onStakePropose: ((pot: number) => void) | null = null;
+  onStakeAccept: (() => void) | null = null;
+  onEscrowReady: ((e: { txHash: string; index: number; args: string }) => void) | null = null;
+  onEscrowConfirmed: (() => void) | null = null;
   onTurn: ((tape: Uint8Array) => void) | null = null;
   onYourTurn: ((turnIndex: number) => void) | null = null;
   onGameOver: ((winner: number) => void) | null = null;
@@ -116,6 +124,10 @@ export class MatchClient {
     this.onSeedCommits = callbacks.onSeedCommits ?? null;
     this.onSeedReady = callbacks.onSeedReady ?? null;
     this.onSeedFailed = callbacks.onSeedFailed ?? null;
+    this.onStakePropose = callbacks.onStakePropose ?? null;
+    this.onStakeAccept = callbacks.onStakeAccept ?? null;
+    this.onEscrowReady = callbacks.onEscrowReady ?? null;
+    this.onEscrowConfirmed = callbacks.onEscrowConfirmed ?? null;
     this.onTurn = callbacks.onTurn ?? null;
     this.onYourTurn = callbacks.onYourTurn ?? null;
     this.onGameOver = callbacks.onGameOver ?? null;
@@ -169,6 +181,26 @@ export class MatchClient {
   /** Send my seed-reveal phase message (commit-reveal match seed). */
   sendSeedReveal(nonce: Uint8Array): void {
     this.sendControl({ type: 'seed_reveal', nonce: toHex(nonce) });
+  }
+
+  /** Propose a stake (pot in whole CKB) for a wagered match. */
+  sendStakePropose(pot: number): void {
+    this.sendControl({ type: 'stake_propose', pot });
+  }
+
+  /** Accept the proposed stake. */
+  sendStakeAccept(): void {
+    this.sendControl({ type: 'stake_accept' });
+  }
+
+  /** Announce the created escrow cell (outpoint + 227-byte args as hex). */
+  sendEscrowReady(e: { txHash: string; index: number; args: string }): void {
+    this.sendControl({ type: 'escrow_ready', txHash: e.txHash, index: e.index, args: e.args });
+  }
+
+  /** Confirm the escrow cell was verified. */
+  sendEscrowConfirmed(): void {
+    this.sendControl({ type: 'escrow_confirmed' });
   }
 
   /** Send my turn tape (binary). */
@@ -247,6 +279,22 @@ export class MatchClient {
       case 'seed_failed':
         this.state = 'closed';
         this.onSeedFailed?.(msg.reason as string);
+        break;
+      case 'stake_propose':
+        this.onStakePropose?.(msg.pot as number);
+        break;
+      case 'stake_accept':
+        this.onStakeAccept?.();
+        break;
+      case 'escrow_ready':
+        this.onEscrowReady?.({
+          txHash: msg.txHash as string,
+          index: msg.index as number,
+          args: msg.args as string,
+        });
+        break;
+      case 'escrow_confirmed':
+        this.onEscrowConfirmed?.();
         break;
       case 'turn':
         // A JSON-typed turn is not expected (tapes are binary), but be safe.
