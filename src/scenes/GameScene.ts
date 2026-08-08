@@ -128,7 +128,6 @@ export class GameScene extends Phaser.Scene {
   private aimNeedle!: Phaser.GameObjects.Graphics;   // rotating aim-direction indicator
   private aimLine!: Phaser.GameObjects.Line;
   private powerMeterFill!: Phaser.GameObjects.Rectangle; // fill bar inside the meter
-  private powerFillMaxH = 0;                         // max fill height (the track height)
   private windMeterBg!: Phaser.GameObjects.Image;    // windMeter.png background
   private windNeedle!: Phaser.GameObjects.Graphics;  // wind direction/strength indicator
   private hud!: Phaser.GameObjects.Text;
@@ -321,13 +320,11 @@ export class GameScene extends Phaser.Scene {
     const trackTop = pmY - PM_H / 2 + PM_FILL_TOP * PM_H;
     const trackW = PM_FILL_W * PM_W;
     const trackH = PM_FILL_H * PM_H;
-    this.powerFillMaxH = trackH;
+    // Full-height rect anchored at the track's BOTTOM edge (origin 0.5, 1); the
+    // render drives scaleY so it grows upward from the bottom with charge.
     this.powerMeterFill = this.add.rectangle(
-      trackLeft + trackW / 2, trackTop + trackH, trackW, 0, 0xff5544,
-    ).setOrigin(0.5, 1).setDepth(8);
-    const pmMaskGfx = this.make.graphics({});
-    pmMaskGfx.fillRect(trackLeft, trackTop, trackW, trackH);
-    this.powerMeterFill.setMask(pmMaskGfx.createGeometryMask());
+      trackLeft + trackW / 2, trackTop + trackH, trackW, trackH, 0xff5544,
+    ).setOrigin(0.5, 1).setScale(1, 0).setDepth(8);
 
     // Wind meter (top-right): an analog needle over the gauge face. The needle
     // rotates about the gauge centre, mapping wind [-MAX, +MAX] onto a ±60° sweep.
@@ -877,9 +874,8 @@ export class GameScene extends Phaser.Scene {
       this.waterSurface.y = w.waterLevel - 1;
     }
 
-    // Power meter fill: grows upward from the track's base with charge level.
-    // Clipped to the inner track by the geometry mask set up in create().
-    this.powerMeterFill.height = w.aim.power * this.powerFillMaxH;
+    // Power meter fill: scaleY grows the bottom-anchored rect upward with charge.
+    this.powerMeterFill.setScale(1, w.aim.power);
 
     // Wind gauge: an analog needle rotating about the gauge centre. Wind
     // [-WIND_GAUGE_MAX, +WIND_GAUGE_MAX] maps onto a ±WIND_NEEDLE_MAX_RAD sweep
