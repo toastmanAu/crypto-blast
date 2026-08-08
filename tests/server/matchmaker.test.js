@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Matchmaker } from '../../server/matchmaker.js';
+import { nonceCommit, toHex } from '../../server/protocol.js';
 
 function makeFakeClient(id) {
   return {
@@ -16,11 +17,22 @@ function makeFakeClient(id) {
   };
 }
 
+const NONCE_A = new Uint8Array(32).fill(0xa1);
+const NONCE_B = new Uint8Array(32).fill(0xb2);
+
+/** Drive the commit-reveal seed phase so the room is ready for turns. */
+function seedRoom(mm, a, b) {
+  mm.handleSeedCommit(a, toHex(nonceCommit(NONCE_A)));
+  mm.handleSeedCommit(b, toHex(nonceCommit(NONCE_B)));
+  mm.handleSeedReveal(a, toHex(NONCE_A));
+  mm.handleSeedReveal(b, toHex(NONCE_B));
+}
+
 describe('Matchmaker', () => {
   let mm;
-  const SEED = 424242;
   beforeEach(() => {
-    mm = new Matchmaker({ randomSeed: () => SEED });
+    // seedTimeoutMs: 0 disables the reveal-deadline timer (no lingering timers in tests).
+    mm = new Matchmaker({ seedTimeoutMs: 0 });
   });
 
   describe('lobby + pairing', () => {
@@ -40,8 +52,8 @@ describe('Matchmaker', () => {
       expect(ma).toBeTruthy();
       expect(mb).toBeTruthy();
       expect(ma.room).toBe(mb.room);
-      expect(ma.seed).toBe(SEED);
-      expect(mb.seed).toBe(SEED);
+      // The seed is no longer chosen by the server — it arrives via commit-reveal.
+      expect(ma.seed).toBeUndefined();
     });
 
     it('assigns the first joiner team 0 and the second team 1', () => {
@@ -57,13 +69,12 @@ describe('Matchmaker', () => {
       expect(mb.team).toBe(1);
     });
 
-    it('tells team 0 it acts first via your_turn(0)', () => {
+    it('does not assign a turn until the seed phase completes', () => {
       const a = makeFakeClient('a');
       const b = makeFakeClient('b');
       mm.join(a);
       mm.join(b);
-      expect(a.controls()).toContainEqual({ type: 'your_turn', turnIndex: 0 });
-      // Team 1 has not been told it is their turn yet.
+      expect(a.controls().some((m) => m.type === 'your_turn')).toBe(false);
       expect(b.controls().some((m) => m.type === 'your_turn')).toBe(false);
     });
 
@@ -95,6 +106,86 @@ describe('Matchmaker', () => {
     });
   });
 
+  describe('commit-reveal seed phase', () => {
+    let a, b;
+    beforeEach(() => {
+      a = makeFakeClient('a'); // team 0
+      b = makeFakeClient('b'); // team 1
+      mm.join(a);
+      mm.join(b);
+      a.clear();
+      b.clear();
+    });
+
+    it('broadcasts both commits once both are received', () => {
+      mm.handleSeedCommit(a, toHex(nonceCommit(NONCE_A)));
+      // Only one commit so far — nothing broadcast yet.
+      expect(a.controls().some((m) => m.type === 'seed_commits')).toBe(false);
+      mm.handleSeedCommit(b, toHex(nonceCommit(NONCE_B)));
+      const ca = a.controls().find((m) => m.type === 'seed_commits');
+      const cb = b.controls().find((m) => m.type === 'seed_commits');
+      expect(ca).toBeTruthy();
+      expect(cb).toBeTruthy();
+      expect(ca.commit0).toBe(toHex(nonceCommit(NONCE_A)));
+      expect(ca.commit1).toBe(toHex(nonceCommit(NONCE_B)));
+      expect(cb.commit0).toBe(ca.commit0);
+      expect(cb.commit1).toBe(ca.commit1);
+    });
+
+    it('broadcasts seed_ready and your_turn(0) once both reveals verify', () => {
+      seedRoom(mm, a, b);
+      const ra = a.controls().find((m) => m.type === 'seed_ready');
+      const rb = b.controls().find((m) => m.type === 'seed_ready');
+      expect(ra).toBeTruthy();
+      expect(rb).toBeTruthy();
+      expect(ra.nonce0).toBe(toHex(NONCE_A));
+      expect(ra.nonce1).toBe(toHex(NONCE_B));
+      expect(rb.nonce0).toBe(ra.nonce0);
+      // Team 0 is told it acts first, only after the seed is ready.
+      expect(a.controls()).toContainEqual({ type: 'your_turn', turnIndex: 0 });
+      expect(b.controls().some((m) => m.type === 'your_turn')).toBe(false);
+    });
+
+    it('rejects a reveal that does not match its commit', () => {
+      mm.handleSeedCommit(a, toHex(nonceCommit(NONCE_A)));
+      mm.handleSeedCommit(b, toHex(nonceCommit(NONCE_B)));
+      // a reveals a DIFFERENT nonce than it committed.
+      mm.handleSeedReveal(a, toHex(new Uint8Array(32).fill(0xff)));
+      expect(a.controls().some((m) => m.type === 'seed_failed')).toBe(true);
+      expect(b.controls().some((m) => m.type === 'seed_failed')).toBe(true);
+      // The room is torn down.
+      expect(mm.rooms.size).toBe(0);
+    });
+
+    it('rejects a malformed reveal', () => {
+      mm.handleSeedCommit(a, toHex(nonceCommit(NONCE_A)));
+      mm.handleSeedCommit(b, toHex(nonceCommit(NONCE_B)));
+      mm.handleSeedReveal(a, 'not-hex');
+      expect(a.controls().some((m) => m.type === 'seed_failed')).toBe(true);
+      expect(mm.rooms.size).toBe(0);
+    });
+
+    it('blocks turns before the room is seeded', () => {
+      // No seed phase yet.
+      mm.handleTurn(a, new Uint8Array([1]));
+      expect(a.lastControl().type).toBe('error');
+      expect(b.tapes().length).toBe(0);
+    });
+
+    it('aborts a room if the seed phase times out', async () => {
+      const mm2 = new Matchmaker({ seedTimeoutMs: 40 });
+      const x = makeFakeClient('x');
+      const y = makeFakeClient('y');
+      mm2.join(x);
+      mm2.join(y);
+      // Neither client commits nor reveals; the room should time out.
+      await new Promise((r) => setTimeout(r, 90));
+      expect(x.controls().some((m) => m.type === 'seed_failed')).toBe(true);
+      expect(y.controls().some((m) => m.type === 'seed_failed')).toBe(true);
+      expect(mm2.rooms.size).toBe(0);
+    });
+  });
+
   describe('turn relay + ownership', () => {
     let a, b;
     beforeEach(() => {
@@ -102,6 +193,7 @@ describe('Matchmaker', () => {
       b = makeFakeClient('b'); // team 1
       mm.join(a);
       mm.join(b);
+      seedRoom(mm, a, b); // complete the commit-reveal seed phase
       a.clear();
       b.clear();
     });
@@ -185,6 +277,7 @@ describe('Matchmaker', () => {
       const b = makeFakeClient('b');
       mm.join(a);
       mm.join(b);
+      seedRoom(mm, a, b);
       b.clear();
       mm.dispatch(a, new Uint8Array([5, 6]), true);
       expect(b.tapes().length).toBe(1);

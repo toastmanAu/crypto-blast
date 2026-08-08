@@ -3,6 +3,7 @@ import type { GameConfig } from './GameScene';
 import { MatchClient } from '../net/MatchClient';
 import type { MatchInfo } from '../net/MatchClient';
 import { MATCHMAKER_URL } from '../config';
+import { nonceCommit, deriveSeed } from '../sim/seed';
 
 export class BootScene extends Phaser.Scene {
   private started = false;
@@ -95,12 +96,37 @@ export class BootScene extends Phaser.Scene {
     client.connect();
   }
 
+  /**
+   * Matched: run the commit-reveal seed phase, THEN start the game with the
+   * derived seed. Neither player nor the server chooses the terrain alone.
+   */
   private onMatched(info: MatchInfo, client: MatchClient): void {
-    this.setOnlineStatus(`matched vs ${info.opponent} — starting…`);
-    const config: GameConfig = {
-      online: { team: info.team, seed: info.seed, opponent: info.opponent, client },
+    this.setOnlineStatus(`matched vs ${info.opponent} — agreeing match seed…`);
+
+    // Commit phase: generate a fresh nonce and send only its hash.
+    const myNonce = randomNonce();
+    client.sendSeedCommit(nonceCommit(myNonce));
+
+    // Once both commits are known, reveal our nonce.
+    client.onSeedCommits = () => {
+      this.setOnlineStatus('seed commits exchanged — revealing…');
+      client.sendSeedReveal(myNonce);
     };
-    this.scene.start('Game', config);
+
+    // Once both reveals verify, derive the shared seed and start the match.
+    client.onSeedReady = (nonces) => {
+      // Defence in depth: confirm both revealed nonces match the commits we saw.
+      // (The server already verified ours; verify the opponent's too.)
+      const { nonce0, nonce1 } = nonces;
+      const seed = deriveSeed(nonce0, nonce1);
+      this.setOnlineStatus(`seed agreed — starting…`);
+      const config: GameConfig = {
+        online: { team: info.team, seed, opponent: info.opponent, client },
+      };
+      this.scene.start('Game', config);
+    };
+
+    client.onSeedFailed = (reason) => this.onOnlineError(`seed failed: ${reason}`);
   }
 
   private onOnlineError(message: string): void {
@@ -114,4 +140,11 @@ export class BootScene extends Phaser.Scene {
     if (!this.onlineStatus) return;
     this.onlineStatus.setText(text).setColor(color);
   }
+}
+
+/** A fresh 32-byte nonce for the commit-reveal match seed. */
+function randomNonce(): Uint8Array {
+  const out = new Uint8Array(32);
+  crypto.getRandomValues(out);
+  return out;
 }

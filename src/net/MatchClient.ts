@@ -26,17 +26,16 @@ export type WebSocketFactory = (url: string) => WebSocketLike;
 export interface MatchInfo {
   room: string;
   team: number;   // 0 or 1
-  seed: number;
   opponent: string;
 }
 
 /**
  * Everything the GameScene needs to run a networked match. Handed off from the
- * boot scene once the matchmaking service reports `matched`.
+ * boot scene once the commit-reveal seed phase completes.
  */
 export interface OnlineMatch {
   team: number;        // the team this client controls (0 or 1)
-  seed: number;        // the match seed chosen by the server
+  seed: number;        // the match seed derived from the commit-reveal nonces
   opponent: string;    // display name of the opponent
   client: MatchClient; // the live connection (for turn exchange)
 }
@@ -45,6 +44,9 @@ export interface MatchCallbacks {
   onOpen?: () => void;
   onWaiting?: () => void;
   onMatched?: (info: MatchInfo) => void;
+  onSeedCommits?: (commits: { commit0: Uint8Array; commit1: Uint8Array }) => void;
+  onSeedReady?: (nonces: { nonce0: Uint8Array; nonce1: Uint8Array }) => void;
+  onSeedFailed?: (reason: string) => void;
   onTurn?: (tape: Uint8Array) => void;
   onYourTurn?: (turnIndex: number) => void;
   onGameOver?: (winner: number) => void;
@@ -63,6 +65,21 @@ export type MatchClientState =
 // ws readyState constants (mirror the browser values).
 const WS_OPEN = 1;
 
+/** 0x-hex encode a Uint8Array (for JSON transport). */
+function toHex(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, '0');
+  return '0x' + s;
+}
+/** Decode a 0x-hex string to a Uint8Array (empty on malformed input). */
+function fromHex(hex: string): Uint8Array {
+  if (typeof hex !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(hex)) return new Uint8Array(0);
+  const raw = hex.slice(2);
+  const out = new Uint8Array(raw.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
 export class MatchClient {
   readonly url: string;
   state: MatchClientState = 'idle';
@@ -75,6 +92,9 @@ export class MatchClient {
   onOpen: (() => void) | null = null;
   onWaiting: (() => void) | null = null;
   onMatched: ((info: MatchInfo) => void) | null = null;
+  onSeedCommits: ((commits: { commit0: Uint8Array; commit1: Uint8Array }) => void) | null = null;
+  onSeedReady: ((nonces: { nonce0: Uint8Array; nonce1: Uint8Array }) => void) | null = null;
+  onSeedFailed: ((reason: string) => void) | null = null;
   onTurn: ((tape: Uint8Array) => void) | null = null;
   onYourTurn: ((turnIndex: number) => void) | null = null;
   onGameOver: ((winner: number) => void) | null = null;
@@ -93,6 +113,9 @@ export class MatchClient {
     this.onOpen = callbacks.onOpen ?? null;
     this.onWaiting = callbacks.onWaiting ?? null;
     this.onMatched = callbacks.onMatched ?? null;
+    this.onSeedCommits = callbacks.onSeedCommits ?? null;
+    this.onSeedReady = callbacks.onSeedReady ?? null;
+    this.onSeedFailed = callbacks.onSeedFailed ?? null;
     this.onTurn = callbacks.onTurn ?? null;
     this.onYourTurn = callbacks.onYourTurn ?? null;
     this.onGameOver = callbacks.onGameOver ?? null;
@@ -136,6 +159,16 @@ export class MatchClient {
   /** Enter the lobby queue. */
   join(name?: string): void {
     this.sendControl({ type: 'join', ...(name ? { name } : {}) });
+  }
+
+  /** Send my seed-commitment phase message (commit-reveal match seed). */
+  sendSeedCommit(commit: Uint8Array): void {
+    this.sendControl({ type: 'seed_commit', commit: toHex(commit) });
+  }
+
+  /** Send my seed-reveal phase message (commit-reveal match seed). */
+  sendSeedReveal(nonce: Uint8Array): void {
+    this.sendControl({ type: 'seed_reveal', nonce: toHex(nonce) });
   }
 
   /** Send my turn tape (binary). */
@@ -196,9 +229,24 @@ export class MatchClient {
         this.onMatched?.({
           room: msg.room as string,
           team: msg.team as number,
-          seed: msg.seed as number,
           opponent: msg.opponent as string,
         });
+        break;
+      case 'seed_commits':
+        this.onSeedCommits?.({
+          commit0: fromHex(msg.commit0 as string),
+          commit1: fromHex(msg.commit1 as string),
+        });
+        break;
+      case 'seed_ready':
+        this.onSeedReady?.({
+          nonce0: fromHex(msg.nonce0 as string),
+          nonce1: fromHex(msg.nonce1 as string),
+        });
+        break;
+      case 'seed_failed':
+        this.state = 'closed';
+        this.onSeedFailed?.(msg.reason as string);
         break;
       case 'turn':
         // A JSON-typed turn is not expected (tapes are binary), but be safe.

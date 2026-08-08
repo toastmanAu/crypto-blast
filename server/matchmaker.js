@@ -16,8 +16,9 @@
 import { WebSocketServer } from 'ws';
 import {
   decodeIncoming, encodeControl, ProtocolError, ErrorCodes,
-  C_JOIN, C_TURN, C_LEAVE, C_PING,
+  C_JOIN, C_TURN, C_LEAVE, C_PING, C_SEED_COMMIT, C_SEED_REVEAL,
   waiting, matched, yourTurn, opponentLeft, pong, error,
+  seedCommits, seedReady, seedFailed, nonceCommit, toHex, fromHex,
 } from './protocol.js';
 
 /**
@@ -28,12 +29,18 @@ import {
  *   - sendTape(uint8Array)  deliver a binary turn tape
  */
 export class Matchmaker {
-  constructor({ randomSeed = () => (Math.random() * 2 ** 31) | 0 } = {}) {
+  /**
+   * @param {object} [options]
+   * @param {number} [options.seedTimeoutMs] Abort a room if its commit-reveal
+   *   seed phase does not complete within this window (0 disables). Defaults to
+   *   30s so a client that commits but never reveals cannot deadlock its opponent.
+   */
+  constructor({ seedTimeoutMs = 30_000 } = {}) {
     this.lobby = [];          // waiting clients, in join order
-    this.rooms = new Map();   // roomId -> { id, clients: [team0, team1], seed, turn }
+    this.rooms = new Map();   // roomId -> room (see _createRoom)
     this.clientRoom = new Map(); // clientId -> roomId
-    this.randomSeed = randomSeed;
     this.nextRoomId = 1;
+    this.seedTimeoutMs = seedTimeoutMs;
   }
 
   /** A client joined. Pair them if someone is waiting, else enqueue. */
@@ -56,6 +63,10 @@ export class Matchmaker {
     const room = this._roomOf(client);
     if (!room) {
       client.sendControl(error(ErrorCodes.NOT_IN_ROOM, 'not in a room'));
+      return;
+    }
+    if (!room.seeded) {
+      client.sendControl(error(ErrorCodes.BAD_FRAME, 'match not seeded yet'));
       return;
     }
     const actingTeam = room.turn % 2;
@@ -98,6 +109,12 @@ export class Matchmaker {
       case C_PING:
         client.sendControl(pong());
         break;
+      case C_SEED_COMMIT:
+        this.handleSeedCommit(client, msg.commit);
+        break;
+      case C_SEED_REVEAL:
+        this.handleSeedReveal(client, msg.nonce);
+        break;
       default:
         client.sendControl(error(ErrorCodes.BAD_FRAME, `unexpected control type: ${msg.type}`));
     }
@@ -129,21 +146,88 @@ export class Matchmaker {
 
   _createRoom(a, b) {
     const roomId = `room-${this.nextRoomId++}`;
-    const seed = this.randomSeed();
     // First to join is team 0 (acts first); the joiner is team 1.
     a.team = 0;
     b.team = 1;
-    const room = { id: roomId, clients: [a, b], seed, turn: 0 };
+    const room = {
+      id: roomId,
+      clients: [a, b],
+      turn: 0,
+      // Commit-reveal seed phase (fair terrain). The seed itself is derived
+      // client-side from the two nonces; the server only verifies the reveals.
+      seeded: false,
+      commits: [null, null],
+      nonces: [null, null],
+    };
     this.rooms.set(roomId, room);
     this.clientRoom.set(a.id, roomId);
     this.clientRoom.set(b.id, roomId);
-    a.sendControl(matched(roomId, 0, seed, this._name(b)));
-    b.sendControl(matched(roomId, 1, seed, this._name(a)));
-    // Team 0 acts first.
-    a.sendControl(yourTurn(0));
+    a.sendControl(matched(roomId, 0, this._name(b)));
+    b.sendControl(matched(roomId, 1, this._name(a)));
+    // Seed phase now: clients send seed_commit; yourTurn(0) is deferred until
+    // the seed is ready (see handleSeedReveal). Guard against a client that
+    // commits but never reveals (would otherwise deadlock the opponent).
+    if (this.seedTimeoutMs > 0) {
+      room.seedTimer = setTimeout(() => {
+        if (!room.seeded) this._seedFail(room, 'seed phase timed out');
+      }, this.seedTimeoutMs);
+    }
+  }
+
+  /** Store a client's nonce commit; when both are in, broadcast them. */
+  handleSeedCommit(client, commitHex) {
+    const room = this._roomOf(client);
+    if (!room || room.seeded) return;
+    const commit = fromHex(commitHex);
+    if (!commit || commit.length !== 32) {
+      client.sendControl(error(ErrorCodes.BAD_FRAME, 'bad seed commit'));
+      return;
+    }
+    room.commits[client.team] = commit;
+    if (room.commits[0] && room.commits[1]) {
+      const c0 = toHex(room.commits[0]);
+      const c1 = toHex(room.commits[1]);
+      room.clients[0].sendControl(seedCommits(c0, c1));
+      room.clients[1].sendControl(seedCommits(c0, c1));
+    }
+  }
+
+  /** Verify a client's nonce reveal against its commit; when both verify,
+   *  broadcast the nonces so both clients derive the shared seed. */
+  handleSeedReveal(client, nonceHex) {
+    const room = this._roomOf(client);
+    if (!room || room.seeded) return;
+    const nonce = fromHex(nonceHex);
+    const commit = room.commits[client.team];
+    if (!nonce || nonce.length !== 32 || !commit) {
+      this._seedFail(room, 'bad seed reveal');
+      return;
+    }
+    if (toHex(nonceCommit(nonce)) !== toHex(commit)) {
+      this._seedFail(room, 'seed reveal does not match commit');
+      return;
+    }
+    room.nonces[client.team] = nonce;
+    if (room.nonces[0] && room.nonces[1]) {
+      room.seeded = true;
+      if (room.seedTimer) { clearTimeout(room.seedTimer); room.seedTimer = null; }
+      const n0 = toHex(room.nonces[0]);
+      const n1 = toHex(room.nonces[1]);
+      room.clients[0].sendControl(seedReady(n0, n1));
+      room.clients[1].sendControl(seedReady(n0, n1));
+      room.clients[0].sendControl(yourTurn(0)); // team 0 acts first
+    }
+  }
+
+  _seedFail(room, reason) {
+    if (!room) return;
+    if (room.clients[0]) room.clients[0].sendControl(seedFailed(reason));
+    if (room.clients[1]) room.clients[1].sendControl(seedFailed(reason));
+    this._destroyRoom(room);
   }
 
   _destroyRoom(room) {
+    if (room.seedTimer) { clearTimeout(room.seedTimer); room.seedTimer = null; }
     for (const c of room.clients) {
       if (c) this.clientRoom.delete(c.id);
     }

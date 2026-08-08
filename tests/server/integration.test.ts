@@ -8,10 +8,12 @@
 import { describe, it, expect } from 'vitest';
 import { WebSocket } from 'ws';
 import { startServer } from '../../server/matchmaker.js';
+import { nonceCommit, toHex as protoHex, fromHex } from '../../server/protocol.js';
 import { createWorld, stepWorld, commitWorld } from '../../src/sim/World';
 import type { TickInput, WorldState } from '../../src/sim/World';
 import { tapeToBytes, bytesToTape } from '../../src/sim/tapeBinary';
 import { toHex } from '../../src/sim/serialize';
+import { deriveSeed } from '../../src/sim/seed';
 
 const GAME_W = 1280;
 const GAME_H = 720;
@@ -130,6 +132,28 @@ async function bootServer(): Promise<{ wss: ReturnType<typeof startServer>; url:
   return { wss, url: `ws://127.0.0.1:${port}` };
 }
 
+/** Drive one client through the commit-reveal seed phase; returns seed_ready. */
+async function seedPhase(client: TestClient, nonce: Uint8Array): Promise<Record<string, unknown>> {
+  client.sendControl({ type: 'seed_commit', commit: protoHex(nonceCommit(nonce)) });
+  await client.nextControl('seed_commits');
+  client.sendControl({ type: 'seed_reveal', nonce: protoHex(nonce) });
+  return client.nextControl('seed_ready');
+}
+
+/** Seed both clients (in parallel) and assert they derive the SAME seed. */
+async function seedBoth(a: TestClient, b: TestClient): Promise<number> {
+  const nonceA = new Uint8Array(32).fill(0x11);
+  const nonceB = new Uint8Array(32).fill(0x22);
+  const [ra, rb] = await Promise.all([seedPhase(a, nonceA), seedPhase(b, nonceB)]);
+  // Both see the same nonces and derive the same seed.
+  expect(ra.nonce0).toBe(rb.nonce0);
+  expect(ra.nonce1).toBe(rb.nonce1);
+  const seedA = deriveSeed(fromHex(ra.nonce0 as string)!, fromHex(ra.nonce1 as string)!);
+  const seedB = deriveSeed(fromHex(rb.nonce0 as string)!, fromHex(rb.nonce1 as string)!);
+  expect(seedA).toBe(seedB);
+  return seedA;
+}
+
 describe('matchmaking integration (real server)', () => {
   it('two clients play a match through the server with agreeing commitments', async () => {
     const { wss, url } = await bootServer();
@@ -145,12 +169,12 @@ describe('matchmaking integration (real server)', () => {
 
       const aMatched = await a.nextControl('matched');
       const bMatched = await b.nextControl('matched');
-      expect(aMatched.seed).toBe(bMatched.seed);
       expect(aMatched.team).toBe(0);
       expect(bMatched.team).toBe(1);
       expect(aMatched.room).toBe(bMatched.room);
 
-      const seed = aMatched.seed as number;
+      // Commit-reveal seed phase: both clients derive the same fair seed.
+      const seed = await seedBoth(a, b);
       const worldA = createWorld(seed, GAME_W, GAME_H);
       const worldB = createWorld(seed, GAME_W, GAME_H);
       expect(toHex(commitWorld(worldA))).toBe(toHex(commitWorld(worldB)));
@@ -204,6 +228,7 @@ describe('matchmaking integration (real server)', () => {
       b.sendControl({ type: 'join' });
       await a.nextControl('matched');
       await b.nextControl('matched');
+      await seedBoth(a, b);
 
       // Team 1 (b) tries to play first — it is team 0's turn.
       b.sendTape(new Uint8Array([1, 2, 3]));

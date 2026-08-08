@@ -33,13 +33,17 @@ describe('MatchClient', () => {
 
   beforeEach(() => {
     events = {
-      open: [], waiting: [], matched: [], turn: [], yourTurn: [],
+      open: [], waiting: [], matched: [], seedCommits: [], seedReady: [],
+      seedFailed: [], turn: [], yourTurn: [],
       gameOver: [], opponentLeft: [], error: [], close: [],
     };
     client = new MatchClient('ws://test:8787', {
       onOpen: () => events.open.push(true),
       onWaiting: () => events.waiting.push(true),
       onMatched: (info) => events.matched.push(info),
+      onSeedCommits: (c) => events.seedCommits.push(c),
+      onSeedReady: (n) => events.seedReady.push(n),
+      onSeedFailed: (reason) => events.seedFailed.push(reason),
       onTurn: (tape) => events.turn.push(tape),
       onYourTurn: (i) => events.yourTurn.push(i),
       onGameOver: (w) => events.gameOver.push(w),
@@ -85,6 +89,16 @@ describe('MatchClient', () => {
       expect(socket.jsonSent()).toContainEqual({ type: 'join' });
     });
 
+    it('sendSeedCommit() sends the commit as 0x-hex', () => {
+      client.sendSeedCommit(new Uint8Array([0xab, 0xcd]));
+      expect(socket.jsonSent()).toContainEqual({ type: 'seed_commit', commit: '0xabcd' });
+    });
+
+    it('sendSeedReveal() sends the nonce as 0x-hex', () => {
+      client.sendSeedReveal(new Uint8Array([0x01, 0xff]));
+      expect(socket.jsonSent()).toContainEqual({ type: 'seed_reveal', nonce: '0x01ff' });
+    });
+
     it('sendTurn() sends the tape as binary', () => {
       const tape = new Uint8Array([1, 2, 3]);
       client.sendTurn(tape);
@@ -115,11 +129,33 @@ describe('MatchClient', () => {
     });
 
     it('matched → onMatched with info + state matched + myTeam', () => {
-      socket.receive(JSON.stringify({ type: 'matched', room: 'r1', team: 1, seed: 999, opponent: 'bob' }));
+      socket.receive(JSON.stringify({ type: 'matched', room: 'r1', team: 1, opponent: 'bob' }));
       expect(events.matched.length).toBe(1);
-      expect(events.matched[0]).toEqual({ room: 'r1', team: 1, seed: 999, opponent: 'bob' });
+      expect(events.matched[0]).toEqual({ room: 'r1', team: 1, opponent: 'bob' });
       expect(client.state).toBe('matched');
       expect(client.myTeam).toBe(1);
+    });
+
+    it('seed_commits → onSeedCommits with decoded commits', () => {
+      socket.receive(JSON.stringify({ type: 'seed_commits', commit0: '0xaabb', commit1: '0xccdd' }));
+      expect(events.seedCommits.length).toBe(1);
+      const c = events.seedCommits[0] as { commit0: Uint8Array; commit1: Uint8Array };
+      expect(Array.from(c.commit0)).toEqual([0xaa, 0xbb]);
+      expect(Array.from(c.commit1)).toEqual([0xcc, 0xdd]);
+    });
+
+    it('seed_ready → onSeedReady with decoded nonces', () => {
+      socket.receive(JSON.stringify({ type: 'seed_ready', nonce0: '0x0102', nonce1: '0x0304' }));
+      expect(events.seedReady.length).toBe(1);
+      const n = events.seedReady[0] as { nonce0: Uint8Array; nonce1: Uint8Array };
+      expect(Array.from(n.nonce0)).toEqual([0x01, 0x02]);
+      expect(Array.from(n.nonce1)).toEqual([0x03, 0x04]);
+    });
+
+    it('seed_failed → onSeedFailed with reason + state closed', () => {
+      socket.receive(JSON.stringify({ type: 'seed_failed', reason: 'bad reveal' }));
+      expect(events.seedFailed).toEqual(['bad reveal']);
+      expect(client.state).toBe('closed');
     });
 
     it('your_turn → onYourTurn with the turn index', () => {

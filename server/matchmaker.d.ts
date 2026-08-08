@@ -6,6 +6,7 @@
 import type { WebSocketServer } from 'ws';
 
 export interface MatchmakerOptions {
+  /** @deprecated the match seed is now commit-reveal; no server seed source. */
   randomSeed?: () => number;
 }
 
@@ -15,6 +16,8 @@ export class Matchmaker {
   join(client: unknown): void;
   leave(client: unknown): void;
   handleTurn(client: unknown, tape: Uint8Array): void;
+  handleSeedCommit(client: unknown, commitHex: string): void;
+  handleSeedReveal(client: unknown, nonceHex: string): void;
   handleMessage(client: unknown, msg: { type: string }): void;
   dispatch(client: unknown, data: unknown, isBinary: boolean): void;
 }

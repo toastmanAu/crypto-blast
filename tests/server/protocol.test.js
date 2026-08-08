@@ -3,6 +3,7 @@ import {
   decodeIncoming, encodeControl, ProtocolError,
   C_JOIN, C_TURN, C_LEAVE, C_PING,
   waiting, matched, yourTurn, gameOver, opponentLeft, pong, error,
+  seedCommits, seedReady, seedFailed, nonceCommit, toHex, fromHex,
 } from '../../server/protocol.js';
 
 describe('decodeIncoming', () => {
@@ -51,8 +52,8 @@ describe('encodeControl', () => {
 
 describe('message builders', () => {
   it('waiting', () => expect(waiting()).toEqual({ type: 'waiting' }));
-  it('matched', () => expect(matched('r1', 0, 1234, 'bob')).toEqual({
-    type: 'matched', room: 'r1', team: 0, seed: 1234, opponent: 'bob',
+  it('matched', () => expect(matched('r1', 0, 'bob')).toEqual({
+    type: 'matched', room: 'r1', team: 0, opponent: 'bob',
   }));
   it('yourTurn', () => expect(yourTurn(3)).toEqual({ type: 'your_turn', turnIndex: 3 }));
   it('gameOver', () => expect(gameOver(1)).toEqual({ type: 'game_over', winner: 1 }));
@@ -61,4 +62,32 @@ describe('message builders', () => {
   it('error', () => expect(error('bad_frame', 'oops')).toEqual({
     type: 'error', code: 'bad_frame', message: 'oops',
   }));
+  it('seedCommits', () => expect(seedCommits('0xaa', '0xbb')).toEqual({
+    type: 'seed_commits', commit0: '0xaa', commit1: '0xbb',
+  }));
+  it('seedReady', () => expect(seedReady('0x01', '0x02')).toEqual({
+    type: 'seed_ready', nonce0: '0x01', nonce1: '0x02',
+  }));
+  it('seedFailed', () => expect(seedFailed('bad reveal')).toEqual({
+    type: 'seed_failed', reason: 'bad reveal',
+  }));
+});
+
+describe('seed helpers', () => {
+  it('nonceCommit is a deterministic 32-byte blake2b', () => {
+    const nonce = new Uint8Array(32).fill(7);
+    const c1 = nonceCommit(nonce);
+    const c2 = nonceCommit(nonce);
+    expect(c1.length).toBe(32);
+    expect(toHex(c1)).toBe(toHex(c2));
+    expect(toHex(nonceCommit(new Uint8Array(32).fill(8)))).not.toBe(toHex(c1));
+  });
+  it('toHex / fromHex round-trip', () => {
+    const bytes = new Uint8Array([0x00, 0xff, 0x10, 0xab]);
+    expect(fromHex(toHex(bytes))).toEqual(bytes);
+  });
+  it('fromHex rejects malformed input', () => {
+    expect(fromHex('nothex')).toBeNull();
+    expect(fromHex('0x123')).toBeNull(); // odd length
+  });
 });

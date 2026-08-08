@@ -52,6 +52,8 @@ JSON control frames (text) + binary turn-tape frames. Defined in
 | type | payload | meaning |
 |------|---------|---------|
 | `join` | `{ name? }` | enter the lobby queue |
+| `seed_commit` | `{ commit }` | commit-reveal seed phase: hash of my nonce |
+| `seed_reveal` | `{ nonce }` | commit-reveal seed phase: my nonce |
 | *(binary)* | tape bytes | my turn's tape (only valid on my turn) |
 | `leave` | `{}` | quit the match / lobby |
 | `ping` | `{}` | keepalive |
@@ -60,16 +62,29 @@ JSON control frames (text) + binary turn-tape frames. Defined in
 | type | payload | meaning |
 |------|---------|---------|
 | `waiting` | `{}` | queued, waiting for an opponent |
-| `matched` | `{ room, team, seed, opponent }` | match start; you are `team` (0/1) |
+| `matched` | `{ room, team, opponent }` | match start; you are `team` (0/1) |
+| `seed_commits` | `{ commit0, commit1 }` | both seed commits — now reveal |
+| `seed_ready` | `{ nonce0, nonce1 }` | both reveals verified — derive the seed |
+| `seed_failed` | `{ reason }` | seed phase aborted (bad reveal / timeout) |
 | *(binary)* | tape bytes | the opponent's turn tape — replay it |
 | `your_turn` | `{ turnIndex }` | it is now your turn |
 | `opponent_left` | `{}` | opponent disconnected — you win by forfeit |
 | `error` | `{ code, message }` | protocol error |
 | `pong` | `{}` | keepalive reply |
 
+**Commit-reveal match seed:** the match seed is **not** chosen by the server. After
+`matched`, each client commits `nonceCommit(nonce)` (32-byte blake2b), the server
+broadcasts both commits, each client reveals its nonce, the server verifies
+`nonceCommit(reveal) == commit` and broadcasts both nonces, and each client derives
+`seed = deriveSeed(nonce0, nonce1)` (`src/sim/seed.ts`). Neither player nor the
+server can pick the terrain alone. Commits are exchanged **before** any reveal, so
+neither side can adapt its nonce to the other's. A reveal that fails verification,
+or a reveal that doesn't arrive within the deadline (default 30s), aborts the room
+with `seed_failed`.
+
 **Turn-ownership guard:** the server tracks `room.turn` and only relays a tape from
-the player whose turn it is (`turn % 2`). This is a *courtesy* guard, not a trust
-anchor — correctness comes from the deterministic sim.
+the player whose turn it is (`turn % 2`), and only once the room is seeded. This is
+a *courtesy* guard, not a trust anchor — correctness comes from the deterministic sim.
 
 ## 4. Turn flow (client)
 
